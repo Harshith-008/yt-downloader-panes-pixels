@@ -1,0 +1,33 @@
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+
+# Local Logs & Debugs
+*.log
+shorts_downloader_debug.log
+
+# Credentials & Credentials Cache
+.yt_shorts_downloader_insta*
+.yt_shorts_downloader_accepted
+*cookies.txt
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDE Settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp

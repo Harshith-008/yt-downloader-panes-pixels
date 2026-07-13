@@ -1,0 +1,1532 @@
+import os
+import sys
+import threading
+import urllib.request
+import io
+import tkinter as tk
+from tkinter import filedialog
+from PIL import Image
+import customtkinter as ctk
+
+# Import our downloader functions
+import downloader
+import crypto_utils
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# Set appearance and theme
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
+
+
+class ShortCard(ctk.CTkFrame):
+    """A card displaying a YouTube Short with its thumbnail, title, and views."""
+    def __init__(self, master, short_data, **kwargs):
+        super().__init__(master, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244", **kwargs)
+        self.short_data = short_data
+        self.selected = tk.BooleanVar(value=True)
+        
+        # Configure layout
+        self.grid_columnconfigure(0, minsize=40)  # Checkbox
+        self.grid_columnconfigure(1, minsize=80)  # Thumbnail
+        self.grid_columnconfigure(2, weight=1)    # Title and views
+        
+        # Checkbox
+        self.checkbox = ctk.CTkCheckBox(
+            self, 
+            text="", 
+            variable=self.selected, 
+            width=24, 
+            height=24,
+            fg_color="#cba6f7",
+            hover_color="#b4befe"
+        )
+        self.checkbox.grid(row=0, column=0, padx=(12, 6), pady=12, sticky="w")
+        
+        # Thumbnail placeholder / Image
+        self.thumb_label = ctk.CTkLabel(self, text="Loading...", width=60, height=90, fg_color="#181825", corner_radius=6)
+        self.thumb_label.grid(row=0, column=1, padx=6, pady=12, sticky="w")
+        
+        # Details Frame (Title + Views)
+        self.details_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.details_frame.grid(row=0, column=2, padx=12, pady=12, sticky="nsew")
+        self.details_frame.grid_columnconfigure(0, weight=1)
+        
+        # Title (wrapped)
+        self.title_label = ctk.CTkLabel(
+            self.details_frame, 
+            text=short_data['title'], 
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=350,
+            text_color="#cdd6f4"
+        )
+        self.title_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        
+        # Views count formatted nicely (e.g. 1.2M views)
+        views = short_data['views']
+        if views >= 1_000_000_000:
+            views_str = f"{views / 1_000_000_000:.1f}B views"
+        elif views >= 1_000_000:
+            views_str = f"{views / 1_000_000:.1f}M views"
+        elif views >= 1_000:
+            views_str = f"{views / 1_000:.1f}K views"
+        else:
+            views_str = f"{views} views"
+            
+        self.views_label = ctk.CTkLabel(
+            self.details_frame,
+            text=views_str,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6e3a1",
+            anchor="w"
+        )
+        self.views_label.grid(row=1, column=0, sticky="w")
+        
+        # Load thumbnail asynchronously
+        threading.Thread(target=self.load_thumbnail, daemon=True).start()
+        
+    def load_thumbnail(self):
+        url = self.short_data.get('thumbnail')
+        if not url:
+            self.set_blank_thumb()
+            return
+            
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=8) as response:
+                image_data = response.read()
+            img = Image.open(io.BytesIO(image_data))
+            
+            # Resize image to fit nicely while maintaining vertical aspect ratio
+            # Shorts default thumbnail is typically letterboxed. We crop/scale to a neat vertical layout
+            w, h = img.size
+            if w > h:
+                # Landscape letterbox - crop the sides to get vertical aspect ratio
+                new_w = int(h * 2/3)
+                start_x = (w - new_w) // 2
+                img = img.crop((start_x, 0, start_x + new_w, h))
+            
+            # Create CTkImage
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(60, 90))
+            
+            # Update label in main thread
+            self.after(0, lambda: self.set_thumb_image(ctk_img))
+            
+        except Exception as e:
+            print(f"Error loading thumbnail: {e}")
+            self.after(0, self.set_blank_thumb)
+            
+    def set_thumb_image(self, ctk_img):
+        self.thumb_label.configure(image=ctk_img, text="")
+        
+    def set_blank_thumb(self):
+        # Create a solid gray blank placeholder image
+        blank_img = Image.new("RGB", (60, 90), color="#313244")
+        ctk_img = ctk.CTkImage(light_image=blank_img, dark_image=blank_img, size=(60, 90))
+        self.thumb_label.configure(image=ctk_img, text="")
+
+    def is_selected(self):
+        return self.selected.get()
+
+
+class ReelCard(ctk.CTkFrame):
+    """A card displaying an Instagram Reel with its thumbnail, caption, and duration."""
+    def __init__(self, master, reel_data, **kwargs):
+        super().__init__(master, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244", **kwargs)
+        self.reel_data = reel_data
+        self.selected = tk.BooleanVar(value=True)
+        
+        self.grid_columnconfigure(0, minsize=40)  # Checkbox
+        self.grid_columnconfigure(1, minsize=80)  # Thumbnail
+        self.grid_columnconfigure(2, weight=1)    # Details
+        
+        # Checkbox
+        self.checkbox = ctk.CTkCheckBox(
+            self, 
+            text="", 
+            variable=self.selected, 
+            width=24, 
+            height=24,
+            fg_color="#cba6f7",
+            hover_color="#b4befe"
+        )
+        self.checkbox.grid(row=0, column=0, padx=(12, 6), pady=12, sticky="w")
+        
+        # Thumbnail placeholder / Image
+        self.thumb_label = ctk.CTkLabel(self, text="Loading...", width=60, height=90, fg_color="#181825", corner_radius=6)
+        self.thumb_label.grid(row=0, column=1, padx=6, pady=12, sticky="w")
+        
+        # Details Frame (Title + Uploader)
+        self.details_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.details_frame.grid(row=0, column=2, padx=12, pady=12, sticky="nsew")
+        self.details_frame.grid_columnconfigure(0, weight=1)
+        
+        # Title (wrapped)
+        caption_text = reel_data['title'] if reel_data['title'] else "Instagram Reel"
+        self.title_label = ctk.CTkLabel(
+            self.details_frame, 
+            text=caption_text, 
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=350,
+            text_color="#cdd6f4"
+        )
+        self.title_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        
+        # Uploader & Duration info
+        duration_str = f"Duration: {reel_data['duration']}s" if reel_data['duration'] > 0 else ""
+        uploader_str = f"@{reel_data['uploader']}" if reel_data['uploader'] != 'Unknown' else "Instagram Creator"
+        details_text = f"{uploader_str} | {duration_str}" if duration_str else uploader_str
+        
+        self.views_label = ctk.CTkLabel(
+            self.details_frame,
+            text=details_text,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6e3a1",
+            anchor="w"
+        )
+        self.views_label.grid(row=1, column=0, sticky="w")
+        
+        # Load thumbnail asynchronously
+        threading.Thread(target=self.load_thumbnail, daemon=True).start()
+        
+    def load_thumbnail(self):
+        url = self.reel_data.get('thumbnail')
+        if not url:
+            self.set_blank_thumb()
+            return
+            
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=8) as response:
+                image_data = response.read()
+            img = Image.open(io.BytesIO(image_data))
+            
+            # Crop to vertical aspect ratio
+            w, h = img.size
+            if w > h:
+                new_w = int(h * 2/3)
+                start_x = (w - new_w) // 2
+                img = img.crop((start_x, 0, start_x + new_w, h))
+            
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(60, 90))
+            self.after(0, lambda: self.set_thumb_image(ctk_img))
+            
+        except Exception as e:
+            print(f"Error loading Reel thumbnail: {e}")
+            self.after(0, self.set_blank_thumb)
+            
+    def set_thumb_image(self, ctk_img):
+        self.thumb_label.configure(image=ctk_img, text="")
+        
+    def set_blank_thumb(self):
+        blank_img = Image.new("RGB", (60, 90), color="#313244")
+        ctk_img = ctk.CTkImage(light_image=blank_img, dark_image=blank_img, size=(60, 90))
+        self.thumb_label.configure(image=ctk_img, text="")
+
+    def is_selected(self):
+        return self.selected.get()
+
+
+def check_terms_accepted():
+    config_dir = os.path.expanduser("~")
+    config_path = os.path.join(config_dir, ".yt_shorts_downloader_accepted")
+    return os.path.exists(config_path)
+
+def set_terms_accepted():
+    config_dir = os.path.expanduser("~")
+    config_path = os.path.join(config_dir, ".yt_shorts_downloader_accepted")
+    try:
+        with open(config_path, "w") as f:
+            f.write("accepted=true\n")
+    except Exception as e:
+        print(f"Error saving terms acceptance: {e}")
+
+class TermsWindow(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Terms & Conditions - YT Downloader by Panes & Pixels")
+        self.geometry("500x580")
+        self.resizable(False, False)
+        self.configure(fg_color="#11111b")
+        self.accepted = False
+        
+        # Load window icon
+        try:
+            icon_file = resource_path("icon.ico")
+            if os.path.exists(icon_file):
+                self.iconbitmap(icon_file)
+        except Exception as e:
+            print(f"Error setting TermsWindow icon: {e}")
+            
+        # Center window
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.winfo_screenheight() // 2) - (height // 2)
+        self.geometry(f'+{x}+{y}')
+        
+        # Fade-in animation on startup
+        self.attributes("-alpha", 0.0)
+        self.fade_in()
+        
+        # UI Elements
+        # Title
+        self.title_label = ctk.CTkLabel(
+            self,
+            text="Terms & Conditions",
+            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            text_color="#cba6f7"
+        )
+        self.title_label.pack(pady=(15, 5))
+        
+        # Subtitle/Warning
+        self.warning_label = ctk.CTkLabel(
+            self,
+            text="Please review and accept to continue",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.warning_label.pack(pady=(0, 10))
+        
+        # Scrollable Textbox for terms
+        self.textbox = ctk.CTkTextbox(
+            self,
+            width=440,
+            height=260,
+            fg_color="#181825",
+            border_color="#313244",
+            border_width=1,
+            text_color="#cdd6f4",
+            wrap="word",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        self.textbox.pack(padx=30, pady=5)
+        
+        terms_text = (
+            "TERMS AND CONDITIONS & COPYRIGHT DISCLAIMER\n\n"
+            "Please read this Disclaimer and Terms of Use carefully before using the YT Downloader by Panes & Pixels application.\n\n"
+            "1. Educational and Personal Use Only\n"
+            "This software is designed solely for educational, research, and personal, non-commercial use. You agree not to use this tool for commercial purposes or to infringe upon the rights of any content creators.\n\n"
+            "2. Copyright Compliance\n"
+            "Downloading copyrighted material from YouTube or Instagram without permission from the copyright owner is illegal and violates the respective platform's Terms of Service. You are solely responsible for ensuring that you have the legal right or permission to download any video/audio content.\n\n"
+            "The developer of this application does not encourage, support, or condone copyright infringement. By using this tool, you warrant that you will only download content for which you own the copyright or have obtained explicit permission from the copyright holder.\n\n"
+            "3. No Warranties and Limitation of Liability\n"
+            "This software is provided 'as is' without warranty of any kind. The developer shall not be liable for any claims, damages, account suspensions, or legal actions resulting from the use or misuse of this tool."
+        )
+        self.textbox.insert("1.0", terms_text)
+        self.textbox.configure(state="disabled") # Make read-only
+        
+        # Checkbox
+        self.agree_var = tk.BooleanVar(value=False)
+        self.checkbox = ctk.CTkCheckBox(
+            self,
+            text="I agree to the Terms of Service & Copyright Disclaimer",
+            variable=self.agree_var,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            fg_color="#cba6f7",
+            hover_color="#b4befe",
+            command=self.toggle_accept_button
+        )
+        self.checkbox.pack(padx=30, pady=10, anchor="w")
+        
+        # Buttons frame
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.pack(fill="x", padx=30, pady=(5, 5))
+        self.btn_frame.grid_columnconfigure(0, weight=1)
+        self.btn_frame.grid_columnconfigure(1, weight=1)
+        
+        self.decline_btn = ctk.CTkButton(
+            self.btn_frame,
+            text="Decline & Exit",
+            fg_color="#f38ba8",
+            hover_color="#eba0b2",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.decline,
+            corner_radius=6
+        )
+        self.decline_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+        
+        self.accept_btn = ctk.CTkButton(
+            self.btn_frame,
+            text="Accept & Continue",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            state="disabled",
+            command=self.accept,
+            corner_radius=6
+        )
+        self.accept_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+        
+        # Copyright Label
+        self.copyright_label = ctk.CTkLabel(
+            self,
+            text="© Copyright by Panes & Pixels. All rights reserved.",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            text_color="#585b70"
+        )
+        self.copyright_label.pack(side="bottom", pady=10)
+        
+    def fade_in(self, alpha=0.0):
+        if alpha < 1.0:
+            alpha += 0.08
+            if alpha > 1.0:
+                alpha = 1.0
+            self.attributes("-alpha", alpha)
+            self.after(16, lambda: self.fade_in(alpha))
+            
+    def toggle_accept_button(self):
+        if self.agree_var.get():
+            self.accept_btn.configure(state="normal")
+        else:
+            self.accept_btn.configure(state="disabled")
+            
+    def accept(self):
+        self.accepted = True
+        set_terms_accepted()
+        self.destroy()
+    def decline(self):
+        self.accepted = False
+        self.destroy()
+
+
+class InstaLoginWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Instagram Login Settings")
+        self.geometry("450x380")
+        self.resizable(False, False)
+        self.configure(fg_color="#11111b")
+        self.transient(parent)
+        self.grab_set()
+        
+        # Load window icon
+        try:
+            icon_file = resource_path("icon.ico")
+            if os.path.exists(icon_file):
+                self.iconbitmap(icon_file)
+        except:
+            pass
+            
+        # Title
+        self.title_lbl = ctk.CTkLabel(
+            self,
+            text="Instagram Authentication",
+            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
+            text_color="#f5c2e7"
+        )
+        self.title_lbl.pack(pady=(20, 10))
+        
+        # Info notice
+        self.info_lbl = ctk.CTkLabel(
+            self,
+            text="Credentials are encrypted locally on your machine using\nWindows Data Protection (DPAPI). Only your Windows account can read them.",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#a6adc8",
+            justify="center"
+        )
+        self.info_lbl.pack(padx=20, pady=(0, 20))
+        
+        # Username Field
+        self.user_entry = ctk.CTkEntry(
+            self,
+            placeholder_text="Instagram Username...",
+            width=320,
+            height=35,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        self.user_entry.pack(pady=10)
+        
+        # Password Field
+        self.pass_entry = ctk.CTkEntry(
+            self,
+            placeholder_text="Instagram Password...",
+            width=320,
+            height=35,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            show="*",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        self.pass_entry.pack(pady=10)
+        
+        # Status Label
+        self.status_lbl = ctk.CTkLabel(
+            self,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6e3a1"
+        )
+        self.status_lbl.pack(pady=5)
+        
+        # Buttons Row
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(pady=15)
+        
+        self.save_btn = ctk.CTkButton(
+            btn_frame,
+            text="Save & Encrypt",
+            width=130,
+            height=35,
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.save_creds,
+            corner_radius=6
+        )
+        self.save_btn.pack(side="left", padx=10)
+        
+        self.clear_btn = ctk.CTkButton(
+            btn_frame,
+            text="Clear",
+            width=100,
+            height=35,
+            fg_color="#f38ba8",
+            hover_color="#eba0ac",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.clear_creds,
+            corner_radius=6
+        )
+        self.clear_btn.pack(side="left", padx=10)
+        
+        # Load existing details if any
+        self.load_creds()
+        
+    def load_creds(self):
+        config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+        if os.path.exists(config_path):
+            try:
+                import crypto_utils
+                with open(config_path, "r", encoding="utf-8") as f:
+                    enc_str = f.read().strip()
+                creds = crypto_utils.decrypt_credentials(enc_str)
+                if creds:
+                    user, pw = creds
+                    self.user_entry.insert(0, user)
+                    self.pass_entry.insert(0, pw)
+                    self.status_lbl.configure(text="Loaded saved credentials (encrypted).", text_color="#a6e3a1")
+            except Exception as e:
+                print(f"Error loading credentials: {e}")
+                
+    def save_creds(self):
+        user = self.user_entry.get().strip()
+        pw = self.pass_entry.get().strip()
+        if not user or not pw:
+            self.status_lbl.configure(text="Please fill in both fields.", text_color="#f38ba8")
+            return
+            
+        self.save_btn.configure(state="disabled")
+        self.clear_btn.configure(state="disabled")
+        self.status_lbl.configure(text="Connecting to Instagram...", text_color="#f9e2af")
+        self.update()
+        
+        threading.Thread(target=self.login_worker, args=(user, pw), daemon=True).start()
+        
+    def login_worker(self, username, password):
+        try:
+            import instaloader
+            from instaloader.exceptions import TwoFactorAuthRequiredException
+            
+            ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            L = instaloader.Instaloader(user_agent=ua)
+            
+            try:
+                L.login(username, password)
+                session_file = os.path.join(
+                    os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+                    "Instaloader",
+                    f"session-{username}"
+                )
+                os.makedirs(os.path.dirname(session_file), exist_ok=True)
+                L.save_session_to_file(filename=session_file)
+                
+                import crypto_utils
+                enc_str = crypto_utils.encrypt_credentials(username, password)
+                config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+                with open(config_path, "w", encoding="utf-8") as f:
+                    f.write(enc_str)
+                    
+                self.after(0, lambda: self.login_success())
+            except TwoFactorAuthRequiredException:
+                self.after(0, lambda: self.handle_2fa(L, username, password))
+            except Exception as e:
+                self.after(0, lambda err=e: self.login_failed(f"Login failed: {err}"))
+        except Exception as e:
+            self.after(0, lambda err=e: self.login_failed(f"Error: {err}"))
+            
+    def handle_2fa(self, L, username, password):
+        dialog = ctk.CTkInputDialog(
+            text="Two-Factor Authentication is required.\nPlease enter the code sent to your device:",
+            title="Instagram 2FA"
+        )
+        dialog.transient(self)
+        dialog.grab_set()
+        
+        code = dialog.get_input()
+        if not code:
+            self.login_failed("2FA code required. Login aborted.")
+            return
+            
+        self.status_lbl.configure(text="Verifying 2FA code...", text_color="#f9e2af")
+        self.update()
+        
+        threading.Thread(target=self.verify_2fa_worker, args=(L, username, password, code), daemon=True).start()
+        
+    def verify_2fa_worker(self, L, username, password, code):
+        try:
+            session_file = os.path.join(
+                os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+                "Instaloader",
+                f"session-{username}"
+            )
+            os.makedirs(os.path.dirname(session_file), exist_ok=True)
+            
+            L.two_factor_login(code)
+            L.save_session_to_file(filename=session_file)
+            
+            import crypto_utils
+            enc_str = crypto_utils.encrypt_credentials(username, password)
+            config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(enc_str)
+                
+            self.after(0, lambda: self.login_success())
+        except Exception as e:
+            self.after(0, lambda err=e: self.login_failed(f"2FA failed: {err}"))
+            
+    def login_success(self):
+        self.save_btn.configure(state="normal")
+        self.clear_btn.configure(state="normal")
+        self.status_lbl.configure(text="Connected and saved successfully!", text_color="#a6e3a1")
+        
+    def login_failed(self, msg):
+        self.save_btn.configure(state="normal")
+        self.clear_btn.configure(state="normal")
+        # Truncate message if it is too long
+        if len(msg) > 50:
+            msg = msg[:47] + "..."
+        self.status_lbl.configure(text=msg, text_color="#f38ba8")
+            
+    def clear_creds(self):
+        config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+        if os.path.exists(config_path):
+            try:
+                os.remove(config_path)
+            except:
+                pass
+        self.user_entry.delete(0, "end")
+        self.pass_entry.delete(0, "end")
+        self.status_lbl.configure(text="Cleared credentials.", text_color="#f9e2af")
+
+class App(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        
+        # Configure window
+        self.title("YT Downloader by Panes & Pixels")
+        self.geometry("640x740")
+        self.minsize(580, 620)
+        self.configure(fg_color="#11111b")
+        
+        # Load window icon
+        try:
+            icon_file = resource_path("icon.ico")
+            if os.path.exists(icon_file):
+                self.iconbitmap(icon_file)
+        except Exception as e:
+            print(f"Error setting App window icon: {e}")
+            
+        # Smooth fade-in animation on startup
+        self.attributes("-alpha", 0.0)
+        self.fade_in()
+        
+        # YouTube Downloader State Variables
+        self.shorts_list = []
+        self.cards = []
+        
+        # Instagram Downloader State Variables
+        self.insta_reel_data = None
+        self.insta_cards = []
+        
+        self.default_download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        self.download_dir = tk.StringVar(value=self.default_download_dir)
+        self.is_processing = False
+        
+        # Design UI components
+        self.build_ui()
+        
+    def fade_in(self, alpha=0.0):
+        if alpha < 1.0:
+            alpha += 0.08
+            if alpha > 1.0:
+                alpha = 1.0
+            self.attributes("-alpha", alpha)
+            self.after(16, lambda: self.fade_in(alpha))
+            
+    def build_ui(self):
+        # We create 3 separate containers for different screens
+        self.dashboard_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.yt_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.insta_frame = ctk.CTkFrame(self, fg_color="transparent")
+        
+        self.setup_dashboard()
+        self.setup_youtube_ui()
+        self.setup_instagram_ui()
+        
+        # Start at dashboard
+        self.show_dashboard()
+        
+    def show_dashboard(self):
+        self.yt_frame.pack_forget()
+        self.insta_frame.pack_forget()
+        self.dashboard_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.attributes("-alpha", 0.5)
+        self.fade_in(0.5)
+        
+    def show_youtube_downloader(self):
+        self.dashboard_frame.pack_forget()
+        self.yt_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.attributes("-alpha", 0.5)
+        self.fade_in(0.5)
+        
+    def show_instagram_downloader(self):
+        self.dashboard_frame.pack_forget()
+        self.insta_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.attributes("-alpha", 0.5)
+        self.fade_in(0.5)
+        
+    def setup_dashboard(self):
+        # Header
+        header = ctk.CTkLabel(
+            self.dashboard_frame,
+            text="YT Downloader",
+            font=ctk.CTkFont(family="Segoe UI", size=32, weight="bold"),
+            text_color="#cba6f7"
+        )
+        header.pack(pady=(60, 5))
+        
+        brand = ctk.CTkLabel(
+            self.dashboard_frame,
+            text="by Panes & Pixels",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color="#89b4fa"
+        )
+        brand.pack(pady=(0, 10))
+        
+        sub = ctk.CTkLabel(
+            self.dashboard_frame,
+            text="Select a platform to start downloading",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        sub.pack(pady=(0, 50))
+        
+        # Grid frame for options
+        grid_frame = ctk.CTkFrame(self.dashboard_frame, fg_color="transparent")
+        grid_frame.pack(fill="x", padx=40, pady=10)
+        grid_frame.grid_columnconfigure(0, weight=1)
+        grid_frame.grid_columnconfigure(1, weight=1)
+        
+        # YouTube Card Button
+        self.yt_card = ctk.CTkButton(
+            grid_frame,
+            text="YouTube Shorts\n\nDownload top channel Shorts",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            fg_color="#1e1e2e",
+            hover_color="#f38ba8", # Red highlight
+            text_color="#cdd6f4",
+            height=180,
+            corner_radius=12,
+            border_width=1,
+            border_color="#313244",
+            command=self.show_youtube_downloader
+        )
+        self.yt_card.grid(row=0, column=0, padx=(0, 15), sticky="ew")
+        
+        # Instagram Card Button
+        self.insta_card = ctk.CTkButton(
+            grid_frame,
+            text="Instagram Reels\n\nDownload Reels via links",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            fg_color="#1e1e2e",
+            hover_color="#f5c2e7", # Pinkish highlight
+            text_color="#cdd6f4",
+            height=180,
+            corner_radius=12,
+            border_width=1,
+            border_color="#313244",
+            command=self.show_instagram_downloader
+        )
+        self.insta_card.grid(row=0, column=1, padx=(15, 0), sticky="ew")
+        
+        # Bottom Copyright
+        copyright_lbl = ctk.CTkLabel(
+            self.dashboard_frame,
+            text="© Copyright by Panes & Pixels. All rights reserved.",
+            font=ctk.CTkFont(family="Segoe UI", size=10),
+            text_color="#585b70"
+        )
+        copyright_lbl.pack(side="bottom", pady=30)
+
+    def setup_youtube_ui(self):
+        # Header navigation row
+        nav_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
+        nav_frame.pack(fill="x", padx=20, pady=(15, 5))
+        
+        back_btn = ctk.CTkButton(
+            nav_frame,
+            text="← Dashboard",
+            width=100,
+            height=32,
+            fg_color="#313244",
+            hover_color="#45475a",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.show_dashboard,
+            corner_radius=6
+        )
+        back_btn.pack(side="left")
+        
+        # Headers inside frame
+        yt_title = ctk.CTkLabel(
+            self.yt_frame,
+            text="YouTube Shorts Downloader",
+            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            text_color="#cba6f7"
+        )
+        yt_title.pack(padx=20, pady=(10, 2))
+        
+        yt_sub = ctk.CTkLabel(
+            self.yt_frame,
+            text="Download the top-viewed Shorts from any YouTube channel",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        yt_sub.pack(padx=20, pady=(0, 15))
+        
+        # Search Frame
+        self.search_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
+        self.search_frame.pack(fill="x", padx=20, pady=10)
+        self.search_frame.grid_columnconfigure(0, weight=1)
+        
+        self.url_entry = ctk.CTkEntry(
+            self.search_frame,
+            placeholder_text="Enter YouTube channel link (e.g. @MrBeast)...",
+            height=45,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            placeholder_text_color="#7f849c",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13)
+        )
+        self.url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.url_entry.bind("<Return>", lambda e: self.start_fetch())
+        
+        self.fetch_btn = ctk.CTkButton(
+            self.search_frame,
+            text="Analyze Channel",
+            height=45,
+            fg_color="#89b4fa",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.start_fetch,
+            corner_radius=8
+        )
+        self.fetch_btn.grid(row=0, column=1, sticky="ns")
+        
+        # Status details
+        self.status_label = ctk.CTkLabel(
+            self.yt_frame, 
+            text="Ready to search.", 
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.status_label.pack(padx=20, pady=(5, 5))
+        
+        self.fetch_progress = ctk.CTkProgressBar(
+            self.yt_frame, 
+            height=6, 
+            fg_color="#1e1e2e", 
+            progress_color="#f9e2af"
+        )
+        self.fetch_progress.pack(fill="x", padx=20, pady=(0, 10))
+        self.fetch_progress.set(0)
+        
+        # Results View (Scrollable)
+        self.scroll_frame = ctk.CTkScrollableFrame(
+            self.yt_frame, 
+            fg_color="#181825", 
+            border_color="#313244", 
+            border_width=1,
+            corner_radius=10
+        )
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.placeholder_label = ctk.CTkLabel(
+            self.scroll_frame,
+            text="Paste a YouTube channel link above\nand click 'Analyze Channel' to find top Shorts.",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+        # Controls (Download Folder + Button)
+        self.controls_frame = ctk.CTkFrame(self.yt_frame, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244")
+        self.controls_frame.pack(fill="x", padx=20, pady=(5, 10))
+        self.controls_frame.grid_columnconfigure(1, weight=1)
+        
+        dir_title = ctk.CTkLabel(
+            self.controls_frame, 
+            text="Save to:", 
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6adc8"
+        )
+        dir_title.grid(row=0, column=0, padx=(15, 5), pady=(12, 6), sticky="w")
+        
+        dir_entry = ctk.CTkEntry(
+            self.controls_frame,
+            textvariable=self.download_dir,
+            height=30,
+            fg_color="#181825",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        dir_entry.grid(row=0, column=1, padx=5, pady=(12, 6), sticky="ew")
+        
+        browse_btn = ctk.CTkButton(
+            self.controls_frame,
+            text="Browse...",
+            width=80,
+            height=30,
+            fg_color="#45475a",
+            hover_color="#585b70",
+            text_color="#cdd6f4",
+            command=self.browse_folder,
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        browse_btn.grid(row=0, column=2, padx=(5, 15), pady=(12, 6))
+        
+        self.download_btn = ctk.CTkButton(
+            self.controls_frame,
+            text="Download Top Shorts",
+            height=45,
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            state="disabled",
+            command=self.start_download,
+            corner_radius=8
+        )
+        self.download_btn.grid(row=1, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        
+        self.down_status_label = ctk.CTkLabel(
+            self.controls_frame,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#f5e0dc"
+        )
+        self.down_status_label.grid(row=2, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.down_status_label.grid_remove()
+        
+        self.down_progress = ctk.CTkProgressBar(
+            self.controls_frame,
+            height=6,
+            fg_color="#181825",
+            progress_color="#a6e3a1"
+        )
+        self.down_progress.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.down_progress.set(0)
+        self.down_progress.grid_remove()
+
+        copyright_lbl = ctk.CTkLabel(
+            self.yt_frame,
+            text="© Copyright by Panes & Pixels. All rights reserved.",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            text_color="#585b70"
+        )
+        copyright_lbl.pack(side="bottom", pady=(5, 10))
+
+    def setup_instagram_ui(self):
+        # Header navigation row
+        nav_frame = ctk.CTkFrame(self.insta_frame, fg_color="transparent")
+        nav_frame.pack(fill="x", padx=20, pady=(15, 5))
+        
+        back_btn = ctk.CTkButton(
+            nav_frame,
+            text="← Dashboard",
+            width=100,
+            height=32,
+            fg_color="#313244",
+            hover_color="#45475a",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.show_dashboard,
+            corner_radius=6
+        )
+        back_btn.pack(side="left")
+        
+        self.settings_btn = ctk.CTkButton(
+            nav_frame,
+            text="⚙️ Login Settings",
+            width=120,
+            height=32,
+            fg_color="#313244",
+            hover_color="#45475a",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.open_insta_login_window,
+            corner_radius=6
+        )
+        self.settings_btn.pack(side="right")
+        
+        # Headers inside frame
+        insta_title = ctk.CTkLabel(
+            self.insta_frame,
+            text="Instagram Reels Downloader",
+            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            text_color="#cba6f7"
+        )
+        insta_title.pack(padx=20, pady=(10, 2))
+        
+        insta_sub = ctk.CTkLabel(
+            self.insta_frame,
+            text="Paste any Instagram Reel URL to analyze and download it",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        insta_sub.pack(padx=20, pady=(0, 15))
+        
+        # Search Frame
+        self.insta_search_frame = ctk.CTkFrame(self.insta_frame, fg_color="transparent")
+        self.insta_search_frame.pack(fill="x", padx=20, pady=10)
+        self.insta_search_frame.grid_columnconfigure(0, weight=1)
+        
+        self.insta_url_entry = ctk.CTkEntry(
+            self.insta_search_frame,
+            placeholder_text="Paste Instagram Reel link (e.g. instagram.com/reel/...)...",
+            height=45,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            placeholder_text_color="#7f849c",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13)
+        )
+        self.insta_url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.insta_url_entry.bind("<Return>", lambda e: self.start_insta_fetch())
+        
+        self.insta_fetch_btn = ctk.CTkButton(
+            self.insta_search_frame,
+            text="Analyze Reel",
+            height=45,
+            fg_color="#89b4fa",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.start_insta_fetch,
+            corner_radius=8
+        )
+        self.insta_fetch_btn.grid(row=0, column=1, sticky="ns")
+        
+        # Status details
+        self.insta_status_label = ctk.CTkLabel(
+            self.insta_frame, 
+            text="Ready to search.", 
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.insta_status_label.pack(padx=20, pady=(5, 5))
+        
+        self.insta_fetch_progress = ctk.CTkProgressBar(
+            self.insta_frame, 
+            height=6, 
+            fg_color="#1e1e2e", 
+            progress_color="#f9e2af"
+        )
+        self.insta_fetch_progress.pack(fill="x", padx=20, pady=(0, 10))
+        self.insta_fetch_progress.set(0)
+        
+        # Results View (Scrollable)
+        self.insta_scroll_frame = ctk.CTkScrollableFrame(
+            self.insta_frame, 
+            fg_color="#181825", 
+            border_color="#313244", 
+            border_width=1,
+            corner_radius=10
+        )
+        self.insta_scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.insta_placeholder_label = ctk.CTkLabel(
+            self.insta_scroll_frame,
+            text="Paste an Instagram Reel link above\nand click 'Analyze Reel' to load preview.",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.insta_placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+        # Controls (Download Folder + Button)
+        self.insta_controls_frame = ctk.CTkFrame(self.insta_frame, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244")
+        self.insta_controls_frame.pack(fill="x", padx=20, pady=(5, 10))
+        self.insta_controls_frame.grid_columnconfigure(1, weight=1)
+        
+        dir_title = ctk.CTkLabel(
+            self.insta_controls_frame, 
+            text="Save to:", 
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6adc8"
+        )
+        dir_title.grid(row=0, column=0, padx=(15, 5), pady=(12, 6), sticky="w")
+        
+        # Shared download_dir
+        dir_entry = ctk.CTkEntry(
+            self.insta_controls_frame,
+            textvariable=self.download_dir,
+            height=30,
+            fg_color="#181825",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        dir_entry.grid(row=0, column=1, padx=5, pady=(12, 6), sticky="ew")
+        
+        browse_btn = ctk.CTkButton(
+            self.insta_controls_frame,
+            text="Browse...",
+            width=80,
+            height=30,
+            fg_color="#45475a",
+            hover_color="#585b70",
+            text_color="#cdd6f4",
+            command=self.browse_folder,
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        browse_btn.grid(row=0, column=2, padx=(5, 15), pady=(12, 6))
+        
+        self.insta_download_btn = ctk.CTkButton(
+            self.insta_controls_frame,
+            text="Download Reel",
+            height=45,
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            state="disabled",
+            command=self.start_insta_download,
+            corner_radius=8
+        )
+        self.insta_download_btn.grid(row=1, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        
+        self.insta_down_status_label = ctk.CTkLabel(
+            self.insta_controls_frame,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#f5e0dc"
+        )
+        self.insta_down_status_label.grid(row=2, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.insta_down_status_label.grid_remove()
+        
+        self.insta_down_progress = ctk.CTkProgressBar(
+            self.insta_controls_frame,
+            height=6,
+            fg_color="#181825",
+            progress_color="#a6e3a1"
+        )
+        self.insta_down_progress.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.insta_down_progress.set(0)
+        self.insta_down_progress.grid_remove()
+
+        copyright_lbl = ctk.CTkLabel(
+            self.insta_frame,
+            text="© Copyright by Panes & Pixels. All rights reserved.",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            text_color="#585b70"
+        )
+        copyright_lbl.pack(side="bottom", pady=(5, 10))
+
+    def browse_folder(self):
+        chosen = filedialog.askdirectory(initialdir=self.download_dir.get())
+        if chosen:
+            self.download_dir.set(chosen)
+            
+    # YouTube downloader logical flows
+    def start_fetch(self):
+        url = self.url_entry.get().strip()
+        if not url:
+            self.update_status("Please enter a YouTube channel URL.", 0, error=True)
+            return
+            
+        if self.is_processing:
+            return
+            
+        self.is_processing = True
+        self.fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        for card in self.cards:
+            card.pack_forget()
+            card.destroy()
+        self.cards.clear()
+        self.shorts_list.clear()
+        
+        self.placeholder_label.pack_forget()
+        
+        self.status_label.configure(text_color="#a6adc8")
+        self.fetch_progress.configure(mode="indeterminate")
+        self.fetch_progress.start()
+        self.update_status("Connecting to YouTube...", 0.1)
+        
+        threading.Thread(target=self.fetch_thread_fn, args=(url,), daemon=True).start()
+        
+    def update_status(self, text, progress_val, error=False):
+        self.status_label.configure(text=text)
+        if error:
+            self.status_label.configure(text_color="#f38ba8")
+            self.fetch_progress.configure(progress_color="#f38ba8")
+            self.fetch_progress.stop()
+            self.fetch_progress.configure(mode="determinate")
+            self.fetch_progress.set(0)
+        else:
+            self.status_label.configure(text_color="#a6adc8")
+            self.fetch_progress.configure(progress_color="#f9e2af")
+            
+        if self.fetch_progress.cget("mode") == "determinate":
+            self.fetch_progress.set(progress_val)
+            
+    def fetch_thread_fn(self, url):
+        try:
+            def on_progress(message, pct):
+                self.after(0, lambda: self.update_status(message, pct))
+            shorts = downloader.get_top_shorts(url, progress_callback=on_progress)
+            self.after(0, lambda: self.display_results(shorts))
+        except Exception as e:
+            err_msg = str(e)
+            if "HTTP Error 404" in err_msg or "Requested entity was not found" in err_msg:
+                user_msg = "Channel not found. Check spelling or URL handle."
+            else:
+                user_msg = "Error scanning channel. Verify handle link."
+            self.after(0, lambda: self.handle_fetch_error(user_msg))
+            
+    def handle_fetch_error(self, message):
+        self.is_processing = False
+        self.fetch_btn.configure(state="normal")
+        self.update_status(message, 1.0, error=True)
+        self.placeholder_label.configure(text=message, text_color="#f38ba8")
+        self.placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+    def display_results(self, shorts):
+        self.is_processing = False
+        self.fetch_btn.configure(state="normal")
+        self.fetch_progress.stop()
+        self.fetch_progress.configure(mode="determinate")
+        self.fetch_progress.set(1.0)
+        
+        if not shorts:
+            self.update_status("No shorts found on this channel.", 1.0, error=True)
+            self.placeholder_label.configure(text="No Shorts found for this channel.\nVerify it has Shorts uploaded.", text_color="#f38ba8")
+            self.placeholder_label.pack(expand=True, fill="both", pady=100)
+            return
+            
+        self.shorts_list = shorts
+        self.update_status(f"Found {len(shorts)} top shorts successfully.", 1.0)
+        
+        for idx, short in enumerate(shorts):
+            card = ShortCard(self.scroll_frame, short)
+            self.cards.append(card)
+            self.after(idx * 60, lambda c=card: c.pack(fill="x", padx=5, pady=5))
+            
+        self.download_btn.configure(state="normal")
+        
+    def start_download(self):
+        selected_shorts = []
+        for idx, card in enumerate(self.cards):
+            if card.is_selected():
+                selected_shorts.append(self.shorts_list[idx])
+                
+        if not selected_shorts:
+            self.update_status("Please select at least one Short to download.", 1.0, error=True)
+            return
+            
+        self.is_processing = True
+        self.fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        self.down_status_label.grid()
+        self.down_progress.grid()
+        
+        threading.Thread(target=self.download_thread_fn, args=(selected_shorts,), daemon=True).start()
+        
+    def update_download_progress(self, current_idx, total_count, title, state_dict):
+        percent = state_dict.get('percent', 0.0)
+        speed = state_dict.get('speed', 'N/A')
+        eta = state_dict.get('eta', 'N/A')
+        
+        status_text = f"Downloading Short {current_idx} of {total_count}: \"{title[:30]}...\"\nProgress: {percent:.1f}% | Speed: {speed} | ETA: {eta}"
+        self.down_status_label.configure(text=status_text)
+        
+        overall_pct = ((current_idx - 1) / total_count) + (percent / 100.0 / total_count)
+        self.down_progress.set(overall_pct)
+        
+    def download_thread_fn(self, selected_shorts):
+        total = len(selected_shorts)
+        download_folder = self.download_dir.get()
+        success_count = 0
+        error_count = 0
+        
+        for idx, short in enumerate(selected_shorts, 1):
+            title = short['title']
+            url = short['url']
+            def progress_cb(state_dict):
+                self.after(0, lambda idx=idx, t=title, sd=state_dict: self.update_download_progress(idx, total, t, sd))
+            try:
+                downloader.download_short(url, download_folder, progress_callback=progress_cb)
+                success_count += 1
+            except Exception as e:
+                print(f"Error downloading {title}: {e}")
+                error_count += 1
+                
+        self.after(0, lambda s=success_count, f=error_count: self.finish_downloads(s, f))
+        
+    def finish_downloads(self, success_count, error_count):
+        self.is_processing = False
+        self.fetch_btn.configure(state="normal")
+        self.download_btn.configure(state="normal")
+        
+        total = success_count + error_count
+        summary_msg = f"Finished. Downloaded {success_count}/{total} shorts successfully."
+        if error_count > 0:
+            summary_msg += f" ({error_count} failed)"
+            self.down_status_label.configure(text=summary_msg, text_color="#f38ba8")
+        else:
+            self.down_status_label.configure(text=summary_msg, text_color="#a6e3a1")
+            
+        self.down_progress.set(1.0)
+        self.after(6000, self.clear_download_status_labels)
+        
+    def clear_download_status_labels(self):
+        if not self.is_processing:
+            self.down_status_label.grid_remove()
+            self.down_progress.grid_remove()
+
+    # Instagram Downloader Logic
+    def start_insta_fetch(self):
+        url = self.insta_url_entry.get().strip()
+        if not url:
+            self.update_insta_status("Please enter an Instagram Reel URL.", 0, error=True)
+            return
+            
+        if self.is_processing:
+            return
+            
+        self.is_processing = True
+        self.insta_fetch_btn.configure(state="disabled")
+        self.insta_download_btn.configure(state="disabled")
+        
+        # Clear previous card
+        for card in self.insta_cards:
+            card.pack_forget()
+            card.destroy()
+        self.insta_cards.clear()
+        self.insta_reel_data = None
+        
+        self.insta_placeholder_label.pack_forget()
+        
+        self.insta_status_label.configure(text_color="#a6adc8")
+        self.insta_fetch_progress.configure(mode="indeterminate")
+        self.insta_fetch_progress.start()
+        self.update_insta_status("Extracting Reel information...", 0.1)
+        
+        threading.Thread(target=self.insta_fetch_thread_fn, args=(url,), daemon=True).start()
+
+    def update_insta_status(self, text, progress_val, error=False):
+        self.insta_status_label.configure(text=text)
+        if error:
+            self.insta_status_label.configure(text_color="#f38ba8")
+            self.insta_fetch_progress.configure(progress_color="#f38ba8")
+            self.insta_fetch_progress.stop()
+            self.insta_fetch_progress.configure(mode="determinate")
+            self.insta_fetch_progress.set(0)
+        else:
+            self.insta_status_label.configure(text_color="#a6adc8")
+            self.insta_fetch_progress.configure(progress_color="#f9e2af")
+            
+        if self.insta_fetch_progress.cget("mode") == "determinate":
+            self.insta_fetch_progress.set(progress_val)
+
+    def insta_fetch_thread_fn(self, url):
+        try:
+            reel_data = downloader.get_insta_reel_info(url)
+            self.after(0, lambda: self.display_insta_results(reel_data))
+        except Exception as e:
+            err_msg = str(e)
+            if "Instagram blocked anonymous access" in err_msg:
+                user_msg = "Blocked by Instagram. Please log in on Chrome/Edge or use cookies."
+            else:
+                user_msg = "Error reading Reel link. Check connection or link spelling."
+            self.after(0, lambda: self.handle_insta_fetch_error(user_msg))
+
+    def handle_insta_fetch_error(self, message):
+        self.is_processing = False
+        self.insta_fetch_btn.configure(state="normal")
+        self.update_insta_status(message, 1.0, error=True)
+        self.insta_placeholder_label.configure(text=message, text_color="#f38ba8")
+        self.insta_placeholder_label.pack(expand=True, fill="both", pady=100)
+
+    def display_insta_results(self, reel_data):
+        self.is_processing = False
+        self.insta_fetch_btn.configure(state="normal")
+        self.insta_fetch_progress.stop()
+        self.insta_fetch_progress.configure(mode="determinate")
+        self.insta_fetch_progress.set(1.0)
+        
+        self.insta_reel_data = reel_data
+        self.update_insta_status("Reel analyzed successfully.", 1.0)
+        
+        # Display ReelCard (Smooth Staggered animation style)
+        card = ReelCard(self.insta_scroll_frame, reel_data)
+        self.insta_cards.append(card)
+        self.after(100, lambda: card.pack(fill="x", padx=5, pady=5))
+        
+        self.insta_download_btn.configure(state="normal")
+
+    def start_insta_download(self):
+        if not self.insta_cards or not self.insta_cards[0].is_selected():
+            self.update_insta_status("Please select the Reel to download.", 1.0, error=True)
+            return
+            
+        self.is_processing = True
+        self.insta_fetch_btn.configure(state="disabled")
+        self.insta_download_btn.configure(state="disabled")
+        
+        self.insta_down_status_label.grid()
+        self.insta_down_progress.grid()
+        
+        threading.Thread(target=self.insta_download_thread_fn, args=(self.insta_reel_data,), daemon=True).start()
+
+    def update_insta_download_progress(self, title, state_dict):
+        percent = state_dict.get('percent', 0.0)
+        speed = state_dict.get('speed', 'N/A')
+        eta = state_dict.get('eta', 'N/A')
+        
+        status_text = f"Downloading: \"{title[:30]}...\"\nProgress: {percent:.1f}% | Speed: {speed} | ETA: {eta}"
+        self.insta_down_status_label.configure(text=status_text)
+        self.insta_down_progress.set(percent / 100.0)
+
+    def insta_download_thread_fn(self, reel_data):
+        title = reel_data['title']
+        url = reel_data['url']
+        opts = reel_data.get('ydl_opts')
+        download_folder = self.download_dir.get()
+        
+        def progress_cb(state_dict):
+            self.after(0, lambda t=title, sd=state_dict: self.update_insta_download_progress(t, sd))
+            
+        success = False
+        try:
+            downloader.download_insta_reel(url, download_folder, ydl_opts=opts, progress_callback=progress_cb)
+            success = True
+        except Exception as e:
+            print(f"Error downloading Reel: {e}")
+            
+        self.after(0, lambda s=success: self.finish_insta_downloads(s))
+
+    def finish_insta_downloads(self, success):
+        self.is_processing = False
+        self.insta_fetch_btn.configure(state="normal")
+        self.insta_download_btn.configure(state="normal")
+        
+        if success:
+            self.insta_down_status_label.configure(text="Finished. Downloaded Reel successfully.", text_color="#a6e3a1")
+        else:
+            self.insta_down_status_label.configure(text="Failed to download Reel. Verify uploader rules or cookies.", text_color="#f38ba8")
+            
+        self.insta_down_progress.set(1.0)
+        self.after(6000, self.clear_insta_download_status_labels)
+
+    def clear_insta_download_status_labels(self):
+        if not self.is_processing:
+            self.insta_down_status_label.grid_remove()
+            self.insta_down_progress.grid_remove()
+
+    def open_insta_login_window(self):
+        # Open the top-level credentials window
+        InstaLoginWindow(self)
+
+if __name__ == "__main__":
+    import traceback
+    
+    # Determine the directory of the executable or script
+    if getattr(sys, 'frozen', False):
+        log_dir = os.path.dirname(sys.executable)
+    else:
+        log_dir = os.path.dirname(os.path.abspath(__file__))
+        
+    log_path = os.path.join(log_dir, "shorts_downloader_debug.log")
+    
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n=== App Starting ===\n")
+            
+        # Check terms acceptance first
+        if not check_terms_accepted():
+            terms_win = TermsWindow()
+            terms_win.mainloop()
+            if not terms_win.accepted:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write("Terms declined. Exiting.\n")
+                sys.exit(0)
+            else:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write("Terms accepted.\n")
+                    
+        app = App()
+        
+        # Log successful window initialization
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("Window initialized successfully. Entering mainloop.\n")
+            
+        app.mainloop()
+        
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("App closed normally.\n")
+            
+    except Exception as e:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"CRITICAL EXCEPTION: {e}\n")
+            traceback.print_exc(file=f)
+        # Re-raise for terminal visibility
+        raise e
+
+
