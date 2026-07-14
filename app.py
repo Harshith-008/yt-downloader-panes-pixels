@@ -1951,6 +1951,7 @@ class App(ctk.CTk):
         self.update_insta_status(message, 1.0, error=True)
         self.insta_placeholder_label.configure(text=message, text_color="#f38ba8")
         self.insta_placeholder_label.pack(expand=True, fill="both", pady=100)
+        self.prompt_insta_relogin(message)
 
     def display_insta_results(self, reel_data):
         self.is_processing = False
@@ -2025,6 +2026,17 @@ class App(ctk.CTk):
     def open_insta_login_window(self):
         # Open the top-level credentials window
         InstaLoginWindow(self)
+
+    def prompt_insta_relogin(self, context_msg=""):
+        from tkinter import messagebox
+        res = messagebox.askyesno(
+            "Instagram Login Required",
+            f"Your Instagram login session has expired or requires authentication.\n\n"
+            f"Reason: {context_msg}\n\n"
+            f"Would you like to open the Login Settings window now to enter your password and reconnect?"
+        )
+        if res:
+            self.open_insta_login_window()
 
     def on_yt_tab_changed(self, value):
         # Hide all tab frames
@@ -2390,6 +2402,7 @@ class App(ctk.CTk):
         self.insta_profile_progress.set(0)
         self.update_insta_profile_status(f"Error: {msg}", 1.0, error=True)
         self.insta_download_btn.configure(state="disabled")
+        self.prompt_insta_relogin(msg)
 
     def start_insta_profile_download(self):
         selected_reels = []
