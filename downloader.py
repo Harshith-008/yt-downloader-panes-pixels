@@ -299,13 +299,106 @@ def get_insta_reel_info(reel_url):
         raise Exception("Instagram blocked anonymous access. Make sure you are logged into Instagram in Chrome or Edge, or try a different link.")
     raise Exception(f"Failed to fetch Reel: {last_err}")
 
+def download_insta_reel_via_instaloader(reel_url, download_dir, session_dir, auth_username=None, progress_callback=None):
+    import instaloader
+    import re
+    
+    match = re.search(r'/(?:reel|p|reels)/([a-zA-Z0-9_-]+)', reel_url)
+    if not match:
+        raise Exception("Invalid Instagram Reel URL format.")
+    shortcode = match.group(1)
+    
+    L = instaloader.Instaloader(
+        dirname_pattern=download_dir,
+        filename_pattern='{shortcode}',
+        download_video_thumbnails=False,
+        download_geotags=False,
+        download_comments=False,
+        save_metadata=False,
+        post_metadata_txt_pattern='',
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    )
+    
+    session_loaded = False
+    if auth_username and session_dir:
+        session_file = os.path.join(session_dir, f"session-{auth_username}")
+        if os.path.exists(session_file):
+            try:
+                L.load_session_from_file(auth_username, filename=session_file)
+                session_loaded = True
+            except Exception as e:
+                print(f"Error loading session in Instaloader download: {e}")
+                
+    if not session_loaded:
+        load_cookies_to_instaloader(L)
+        
+    try:
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        if not post.is_video:
+            raise Exception("This Instagram post is not a video.")
+            
+        if progress_callback:
+            progress_callback({'status': 'downloading', 'percent': 50.0, 'speed': 'N/A', 'eta': 'N/A'})
+            
+        L.download_post(post, target=download_dir)
+        
+        if progress_callback:
+            progress_callback({'status': 'finished', 'percent': 100.0, 'speed': '0', 'eta': '0'})
+            
+        expected_file = os.path.join(download_dir, f"{shortcode}.mp4")
+        if os.path.exists(expected_file):
+            title = post.caption or f"instagram_reel_{shortcode}"
+            title = re.sub(r'[\\/*?:"<>|]', "", title).split('\n')[0].strip()
+            if len(title) > 60:
+                title = title[:60]
+            new_file = os.path.join(download_dir, f"{title}.mp4")
+            try:
+                if os.path.exists(new_file):
+                    os.remove(new_file)
+                os.rename(expected_file, new_file)
+                return new_file
+            except:
+                return expected_file
+        return expected_file
+    except Exception as e:
+        raise Exception(f"Instaloader download failed: {e}")
+
 def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback=None, format_preset="Best Quality (Video)"):
     """
-    Downloads a single Instagram Reel using working ydl_opts.
+    Downloads a single Instagram Reel. 
+    Tries Instaloader first (using active sessions/cookies), falls back to yt-dlp.
     """
     if not os.path.exists(download_dir):
         os.makedirs(download_dir)
         
+    # Read saved auth credentials for Instaloader
+    auth_username = None
+    config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+    if os.path.exists(config_path):
+        try:
+            import crypto_utils
+            with open(config_path, "r", encoding="utf-8") as f:
+                enc_str = f.read().strip()
+            creds = crypto_utils.decrypt_credentials(enc_str)
+            if creds:
+                auth_username = creds[0]
+        except Exception as e:
+            print(f"Error loading username for Instaloader downloader: {e}")
+            
+    session_dir = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+        "Instaloader"
+    )
+    
+    # Try Instaloader first
+    try:
+        print("Attempting Reel download via Instaloader...")
+        file_path = download_insta_reel_via_instaloader(reel_url, download_dir, session_dir, auth_username, progress_callback)
+        return file_path
+    except Exception as insta_err:
+        print(f"Instaloader download failed: {insta_err}. Falling back to yt-dlp...")
+        
+    # Fallback to yt-dlp
     def ytdl_hook(d):
         if d['status'] == 'downloading':
             total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
