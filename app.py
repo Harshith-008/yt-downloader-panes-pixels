@@ -91,6 +91,10 @@ class ShortCard(ctk.CTkFrame):
         )
         self.views_label.grid(row=1, column=0, sticky="w")
         
+        self.zoom_win = None
+        self.thumb_label.bind("<Enter>", self.show_zoom_popup)
+        self.thumb_label.bind("<Leave>", self.hide_zoom_popup)
+        
         # Load thumbnail asynchronously
         threading.Thread(target=self.load_thumbnail, daemon=True).start()
         
@@ -106,19 +110,13 @@ class ShortCard(ctk.CTkFrame):
                 image_data = response.read()
             img = Image.open(io.BytesIO(image_data))
             
-            # Resize image to fit nicely while maintaining vertical aspect ratio
-            # Shorts default thumbnail is typically letterboxed. We crop/scale to a neat vertical layout
             w, h = img.size
             if w > h:
-                # Landscape letterbox - crop the sides to get vertical aspect ratio
                 new_w = int(h * 2/3)
                 start_x = (w - new_w) // 2
                 img = img.crop((start_x, 0, start_x + new_w, h))
             
-            # Create CTkImage
             ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(60, 90))
-            
-            # Update label in main thread
             self.after(0, lambda: self.set_thumb_image(ctk_img))
             
         except Exception as e:
@@ -129,10 +127,47 @@ class ShortCard(ctk.CTkFrame):
         self.thumb_label.configure(image=ctk_img, text="")
         
     def set_blank_thumb(self):
-        # Create a solid gray blank placeholder image
         blank_img = Image.new("RGB", (60, 90), color="#313244")
         ctk_img = ctk.CTkImage(light_image=blank_img, dark_image=blank_img, size=(60, 90))
         self.thumb_label.configure(image=ctk_img, text="")
+
+    def show_zoom_popup(self, event):
+        url = self.short_data.get('thumbnail')
+        if not url:
+            return
+        x = self.winfo_pointerx() + 20
+        y = self.winfo_pointery() - 100
+        self.zoom_win = ctk.CTkToplevel(self)
+        self.zoom_win.wm_overrideredirect(True)
+        self.zoom_win.geometry(f"+{x}+{y}")
+        self.zoom_win.configure(fg_color="#11111b")
+        zoom_lbl = ctk.CTkLabel(self.zoom_win, text="Loading Preview...", text_color="#7f849c", font=ctk.CTkFont(family="Segoe UI", size=11))
+        zoom_lbl.pack(padx=3, pady=3)
+        def load_zoom():
+            try:
+                import urllib.request
+                import io
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    img_data = response.read()
+                img = Image.open(io.BytesIO(img_data))
+                img = img.resize((200, 300), Image.Resampling.LANCZOS)
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=(200, 300))
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(image=photo, text="")
+                    zoom_lbl.image = photo
+            except Exception as e:
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(text="Preview Error")
+        threading.Thread(target=load_zoom, daemon=True).start()
+        
+    def hide_zoom_popup(self, event):
+        if self.zoom_win:
+            try:
+                self.zoom_win.destroy()
+            except:
+                pass
+            self.zoom_win = None
 
     def is_selected(self):
         return self.selected.get()
@@ -197,6 +232,10 @@ class ReelCard(ctk.CTkFrame):
         )
         self.views_label.grid(row=1, column=0, sticky="w")
         
+        self.zoom_win = None
+        self.thumb_label.bind("<Enter>", self.show_zoom_popup)
+        self.thumb_label.bind("<Leave>", self.hide_zoom_popup)
+        
         # Load thumbnail asynchronously
         threading.Thread(target=self.load_thumbnail, daemon=True).start()
         
@@ -233,6 +272,44 @@ class ReelCard(ctk.CTkFrame):
         blank_img = Image.new("RGB", (60, 90), color="#313244")
         ctk_img = ctk.CTkImage(light_image=blank_img, dark_image=blank_img, size=(60, 90))
         self.thumb_label.configure(image=ctk_img, text="")
+
+    def show_zoom_popup(self, event):
+        url = self.reel_data.get('thumbnail')
+        if not url:
+            return
+        x = self.winfo_pointerx() + 20
+        y = self.winfo_pointery() - 100
+        self.zoom_win = ctk.CTkToplevel(self)
+        self.zoom_win.wm_overrideredirect(True)
+        self.zoom_win.geometry(f"+{x}+{y}")
+        self.zoom_win.configure(fg_color="#11111b")
+        zoom_lbl = ctk.CTkLabel(self.zoom_win, text="Loading Preview...", text_color="#7f849c", font=ctk.CTkFont(family="Segoe UI", size=11))
+        zoom_lbl.pack(padx=3, pady=3)
+        def load_zoom():
+            try:
+                import urllib.request
+                import io
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    img_data = response.read()
+                img = Image.open(io.BytesIO(img_data))
+                img = img.resize((200, 300), Image.Resampling.LANCZOS)
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=(200, 300))
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(image=photo, text="")
+                    zoom_lbl.image = photo
+            except Exception as e:
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(text="Preview Error")
+        threading.Thread(target=load_zoom, daemon=True).start()
+        
+    def hide_zoom_popup(self, event):
+        if self.zoom_win:
+            try:
+                self.zoom_win.destroy()
+            except:
+                pass
+            self.zoom_win = None
 
     def is_selected(self):
         return self.selected.get()
@@ -299,6 +376,10 @@ class VideoCard(ctk.CTkFrame):
         )
         self.meta_lbl.grid(row=2, column=1, padx=(5, 12), pady=2, sticky="w")
         
+        self.zoom_win = None
+        self.thumb_label.bind("<Enter>", self.show_zoom_popup)
+        self.thumb_label.bind("<Leave>", self.hide_zoom_popup)
+        
         threading.Thread(target=self.load_thumbnail, daemon=True).start()
         
     def load_thumbnail(self):
@@ -326,6 +407,44 @@ class VideoCard(ctk.CTkFrame):
         except Exception as e:
             print(f"Error loading video thumbnail: {e}")
             self.thumb_label.configure(text="Error")
+
+    def show_zoom_popup(self, event):
+        url = self.video_data.get('thumbnail')
+        if not url:
+            return
+        x = self.winfo_pointerx() + 20
+        y = self.winfo_pointery() - 100
+        self.zoom_win = ctk.CTkToplevel(self)
+        self.zoom_win.wm_overrideredirect(True)
+        self.zoom_win.geometry(f"+{x}+{y}")
+        self.zoom_win.configure(fg_color="#11111b")
+        zoom_lbl = ctk.CTkLabel(self.zoom_win, text="Loading Preview...", text_color="#7f849c", font=ctk.CTkFont(family="Segoe UI", size=11))
+        zoom_lbl.pack(padx=3, pady=3)
+        def load_zoom():
+            try:
+                import urllib.request
+                import io
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    img_data = response.read()
+                img = Image.open(io.BytesIO(img_data))
+                img = img.resize((320, 180), Image.Resampling.LANCZOS)
+                photo = ctk.CTkImage(light_image=img, dark_image=img, size=(320, 180))
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(image=photo, text="")
+                    zoom_lbl.image = photo
+            except Exception as e:
+                if self.zoom_win and self.zoom_win.winfo_exists():
+                    zoom_lbl.configure(text="Preview Error")
+        threading.Thread(target=load_zoom, daemon=True).start()
+        
+    def hide_zoom_popup(self, event):
+        if self.zoom_win:
+            try:
+                self.zoom_win.destroy()
+            except:
+                pass
+            self.zoom_win = None
 
 
 def check_terms_accepted():
@@ -764,10 +883,17 @@ class App(ctk.CTk):
         # Instagram Downloader State Variables
         self.insta_reel_data = None
         self.insta_cards = []
+        self.insta_profile_cards = []
         
         self.default_download_dir = os.path.join(os.path.expanduser("~"), "Downloads")
         self.download_dir = tk.StringVar(value=self.default_download_dir)
         self.is_processing = False
+        
+        # Parallel queue manager state
+        import concurrent.futures
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        self.queue_tasks = {}
+        self.task_counter = 0
         
         # Design UI components
         self.build_ui()
@@ -785,6 +911,20 @@ class App(ctk.CTk):
         self.dashboard_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.yt_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.insta_frame = ctk.CTkFrame(self, fg_color="transparent")
+        
+        # Build queue frame (hidden by default)
+        self.queue_frame = ctk.CTkFrame(self, fg_color="#181825", border_width=1, border_color="#313244", height=130, corner_radius=12)
+        
+        queue_lbl = ctk.CTkLabel(
+            self.queue_frame,
+            text="⚡ Active Download Queue",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#cba6f7"
+        )
+        queue_lbl.pack(anchor="w", padx=15, pady=(8, 2))
+        
+        self.queue_scroll = ctk.CTkScrollableFrame(self.queue_frame, fg_color="transparent", height=80)
+        self.queue_scroll.pack(fill="both", expand=True, padx=10, pady=(2, 8))
         
         self.setup_dashboard()
         self.setup_youtube_ui()
@@ -876,6 +1016,19 @@ class App(ctk.CTk):
         )
         self.insta_card.grid(row=0, column=1, padx=(15, 0), sticky="ew")
         
+        # Clipboard switch
+        self.monitor_clipboard = tk.BooleanVar(value=False)
+        self.clipboard_switch = ctk.CTkSwitch(
+            self.dashboard_frame,
+            text="Auto-Detect Copied Video Links",
+            variable=self.monitor_clipboard,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            progress_color="#cba6f7",
+            text_color="#cdd6f4",
+            command=self.toggle_clipboard_monitor
+        )
+        self.clipboard_switch.pack(pady=(40, 10))
+        
         # Bottom Copyright
         copyright_lbl = ctk.CTkLabel(
             self.dashboard_frame,
@@ -883,7 +1036,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=10),
             text_color="#585b70"
         )
-        copyright_lbl.pack(side="bottom", pady=30)
+        copyright_lbl.pack(side="bottom", pady=20)
 
     def setup_youtube_ui(self):
         # Header navigation row
@@ -928,9 +1081,8 @@ class App(ctk.CTk):
             command=self.on_yt_tab_changed,
             fg_color="#181825",
             selected_color="#cba6f7",
-            selected_text_color="#11111b",
             unselected_color="#1e1e2e",
-            unselected_text_color="#cdd6f4",
+            text_color="#cdd6f4",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
         )
         self.yt_tab_control.pack(padx=20, pady=(0, 10), fill="x")
@@ -1200,6 +1352,31 @@ class App(ctk.CTk):
         )
         browse_btn.grid(row=0, column=2, padx=(5, 15), pady=(12, 6))
         
+        # Format preset selector for YouTube
+        format_lbl = ctk.CTkLabel(
+            self.controls_frame,
+            text="Format:",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6adc8"
+        )
+        format_lbl.grid(row=1, column=0, padx=(15, 5), pady=(6, 6), sticky="w")
+        
+        self.yt_format_option = ctk.CTkOptionMenu(
+            self.controls_frame,
+            values=["Best Quality (Video)", "1080p (Video)", "720p (Video)", "480p (Video)", "Audio Only (MP3)"],
+            height=30,
+            fg_color="#313244",
+            button_color="#45475a",
+            button_hover_color="#585b70",
+            text_color="#cdd6f4",
+            dropdown_fg_color="#1e1e2e",
+            dropdown_hover_color="#313244",
+            dropdown_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.yt_format_option.grid(row=1, column=1, columnspan=2, padx=(5, 15), pady=(6, 6), sticky="ew")
+        self.yt_format_option.set("Best Quality (Video)")
+        
         self.download_btn = ctk.CTkButton(
             self.controls_frame,
             text="Download Selected Shorts",
@@ -1212,7 +1389,7 @@ class App(ctk.CTk):
             command=self.start_download,
             corner_radius=8
         )
-        self.download_btn.grid(row=1, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        self.download_btn.grid(row=2, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
         
         self.down_status_label = ctk.CTkLabel(
             self.controls_frame,
@@ -1220,7 +1397,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color="#f5e0dc"
         )
-        self.down_status_label.grid(row=2, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.down_status_label.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
         self.down_status_label.grid_remove()
         
         self.down_progress = ctk.CTkProgressBar(
@@ -1229,7 +1406,7 @@ class App(ctk.CTk):
             fg_color="#181825",
             progress_color="#a6e3a1"
         )
-        self.down_progress.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.down_progress.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
         self.down_progress.set(0)
         self.down_progress.grid_remove()
 
@@ -1277,7 +1454,7 @@ class App(ctk.CTk):
         # Headers inside frame
         insta_title = ctk.CTkLabel(
             self.insta_frame,
-            text="Instagram Reels Downloader",
+            text="Instagram Downloader Suite",
             font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
             text_color="#cba6f7"
         )
@@ -1285,14 +1462,33 @@ class App(ctk.CTk):
         
         insta_sub = ctk.CTkLabel(
             self.insta_frame,
-            text="Paste any Instagram Reel URL to analyze and download it",
+            text="Download single Reels or scrape recent videos from any public profile",
             font=ctk.CTkFont(family="Segoe UI", size=12),
             text_color="#a6adc8"
         )
-        insta_sub.pack(padx=20, pady=(0, 15))
+        insta_sub.pack(padx=20, pady=(0, 10))
         
-        # Search Frame
-        self.insta_search_frame = ctk.CTkFrame(self.insta_frame, fg_color="transparent")
+        # Segmented Button for tabs
+        self.insta_tab_control = ctk.CTkSegmentedButton(
+            self.insta_frame,
+            values=["Single Reel", "Profile Scraper"],
+            command=self.on_insta_tab_changed,
+            fg_color="#181825",
+            selected_color="#cba6f7",
+            selected_text_color="#11111b",
+            unselected_color="#1e1e2e",
+            unselected_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.insta_tab_control.pack(padx=20, pady=(0, 10), fill="x")
+        self.insta_tab_control.set("Single Reel")
+        
+        # Container frames for each tab
+        self.tab_insta_single_frame = ctk.CTkFrame(self.insta_frame, fg_color="transparent")
+        self.tab_insta_profile_frame = ctk.CTkFrame(self.insta_frame, fg_color="transparent")
+        
+        # --- TAB 1: SINGLE REEL WIDGETS ---
+        self.insta_search_frame = ctk.CTkFrame(self.tab_insta_single_frame, fg_color="transparent")
         self.insta_search_frame.pack(fill="x", padx=20, pady=10)
         self.insta_search_frame.grid_columnconfigure(0, weight=1)
         
@@ -1323,9 +1519,8 @@ class App(ctk.CTk):
         )
         self.insta_fetch_btn.grid(row=0, column=1, sticky="ns")
         
-        # Status details
         self.insta_status_label = ctk.CTkLabel(
-            self.insta_frame, 
+            self.tab_insta_single_frame, 
             text="Ready to search.", 
             font=ctk.CTkFont(family="Segoe UI", size=12),
             text_color="#a6adc8"
@@ -1333,7 +1528,7 @@ class App(ctk.CTk):
         self.insta_status_label.pack(padx=20, pady=(5, 5))
         
         self.insta_fetch_progress = ctk.CTkProgressBar(
-            self.insta_frame, 
+            self.tab_insta_single_frame, 
             height=6, 
             fg_color="#1e1e2e", 
             progress_color="#f9e2af"
@@ -1341,15 +1536,14 @@ class App(ctk.CTk):
         self.insta_fetch_progress.pack(fill="x", padx=20, pady=(0, 10))
         self.insta_fetch_progress.set(0)
         
-        # Results View (Scrollable)
         self.insta_scroll_frame = ctk.CTkScrollableFrame(
-            self.insta_frame, 
+            self.tab_insta_single_frame, 
             fg_color="#181825", 
             border_color="#313244", 
             border_width=1,
             corner_radius=10
         )
-        self.insta_scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.insta_scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
         
         self.insta_placeholder_label = ctk.CTkLabel(
             self.insta_scroll_frame,
@@ -1360,9 +1554,79 @@ class App(ctk.CTk):
         )
         self.insta_placeholder_label.pack(expand=True, fill="both", pady=100)
         
-        # Controls (Download Folder + Button)
+        # --- TAB 2: PROFILE SCRAPER WIDGETS ---
+        profile_search_frame = ctk.CTkFrame(self.tab_insta_profile_frame, fg_color="transparent")
+        profile_search_frame.pack(fill="x", padx=20, pady=10)
+        profile_search_frame.grid_columnconfigure(0, weight=1)
+        
+        self.insta_profile_entry = ctk.CTkEntry(
+            profile_search_frame,
+            placeholder_text="Enter Instagram username (e.g. nature)...",
+            height=45,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            placeholder_text_color="#7f849c",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13)
+        )
+        self.insta_profile_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.insta_profile_entry.bind("<Return>", lambda e: self.start_insta_profile_fetch())
+        
+        self.insta_profile_fetch_btn = ctk.CTkButton(
+            profile_search_frame,
+            text="Scrape Reels",
+            height=45,
+            fg_color="#cba6f7",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.start_insta_profile_fetch,
+            corner_radius=8
+        )
+        self.insta_profile_fetch_btn.grid(row=0, column=1, sticky="ns")
+        
+        self.insta_profile_status_label = ctk.CTkLabel(
+            self.tab_insta_profile_frame, 
+            text="Ready to search.", 
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.insta_profile_status_label.pack(padx=20, pady=(5, 5))
+        
+        self.insta_profile_progress = ctk.CTkProgressBar(
+            self.tab_insta_profile_frame, 
+            height=6, 
+            fg_color="#1e1e2e", 
+            progress_color="#f9e2af"
+        )
+        self.insta_profile_progress.pack(fill="x", padx=20, pady=(0, 10))
+        self.insta_profile_progress.set(0)
+        
+        self.insta_profile_scroll_frame = ctk.CTkScrollableFrame(
+            self.tab_insta_profile_frame, 
+            fg_color="#181825", 
+            border_color="#313244", 
+            border_width=1,
+            corner_radius=10
+        )
+        self.insta_profile_scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.insta_profile_placeholder_label = ctk.CTkLabel(
+            self.insta_profile_scroll_frame,
+            text="Enter an Instagram username above\nand click 'Scrape Reels' to search recent videos.",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.insta_profile_placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+        # Pack default frame
+        self.tab_insta_single_frame.pack(fill="both", expand=True)
+        
+        # --- BOTTOM CONTROLS (Common to all tabs) ---
         self.insta_controls_frame = ctk.CTkFrame(self.insta_frame, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244")
-        self.insta_controls_frame.pack(fill="x", padx=20, pady=(5, 10))
+        self.insta_controls_frame.pack(fill="x", padx=20, pady=(5, 5))
         self.insta_controls_frame.grid_columnconfigure(1, weight=1)
         
         dir_title = ctk.CTkLabel(
@@ -1373,7 +1637,6 @@ class App(ctk.CTk):
         )
         dir_title.grid(row=0, column=0, padx=(15, 5), pady=(12, 6), sticky="w")
         
-        # Shared download_dir
         dir_entry = ctk.CTkEntry(
             self.insta_controls_frame,
             textvariable=self.download_dir,
@@ -1400,6 +1663,31 @@ class App(ctk.CTk):
         )
         browse_btn.grid(row=0, column=2, padx=(5, 15), pady=(12, 6))
         
+        # Shared format preset selector at bottom next to download button
+        format_lbl = ctk.CTkLabel(
+            self.insta_controls_frame,
+            text="Format:",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#a6adc8"
+        )
+        format_lbl.grid(row=1, column=0, padx=(15, 5), pady=(6, 6), sticky="w")
+        
+        self.format_option = ctk.CTkOptionMenu(
+            self.insta_controls_frame,
+            values=["Best Quality (Video)", "1080p (Video)", "720p (Video)", "480p (Video)", "Audio Only (MP3)"],
+            height=30,
+            fg_color="#313244",
+            button_color="#45475a",
+            button_hover_color="#585b70",
+            text_color="#cdd6f4",
+            dropdown_fg_color="#1e1e2e",
+            dropdown_hover_color="#313244",
+            dropdown_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.format_option.grid(row=1, column=1, columnspan=2, padx=(5, 15), pady=(6, 6), sticky="ew")
+        self.format_option.set("Best Quality (Video)")
+        
         self.insta_download_btn = ctk.CTkButton(
             self.insta_controls_frame,
             text="Download Reel",
@@ -1412,7 +1700,7 @@ class App(ctk.CTk):
             command=self.start_insta_download,
             corner_radius=8
         )
-        self.insta_download_btn.grid(row=1, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        self.insta_download_btn.grid(row=2, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
         
         self.insta_down_status_label = ctk.CTkLabel(
             self.insta_controls_frame,
@@ -1420,7 +1708,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color="#f5e0dc"
         )
-        self.insta_down_status_label.grid(row=2, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.insta_down_status_label.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
         self.insta_down_status_label.grid_remove()
         
         self.insta_down_progress = ctk.CTkProgressBar(
@@ -1429,10 +1717,10 @@ class App(ctk.CTk):
             fg_color="#181825",
             progress_color="#a6e3a1"
         )
-        self.insta_down_progress.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.insta_down_progress.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
         self.insta_down_progress.set(0)
         self.insta_down_progress.grid_remove()
-
+        
         copyright_lbl = ctk.CTkLabel(
             self.insta_frame,
             text="© Copyright by Panes & Pixels. All rights reserved.",
@@ -1544,14 +1832,10 @@ class App(ctk.CTk):
             self.update_status("Please select at least one Short to download.", 1.0, error=True)
             return
             
-        self.is_processing = True
-        self.fetch_btn.configure(state="disabled")
-        self.download_btn.configure(state="disabled")
-        
-        self.down_status_label.grid()
-        self.down_progress.grid()
-        
-        threading.Thread(target=self.download_thread_fn, args=(selected_shorts,), daemon=True).start()
+        for short in selected_shorts:
+            self.add_to_download_queue(short['title'], short['url'], "youtube", "short")
+            
+        self.update_status(f"Added {len(selected_shorts)} Shorts to download queue.", 1.0)
         
     def update_download_progress(self, current_idx, total_count, title, state_dict):
         percent = state_dict.get('percent', 0.0)
@@ -1691,14 +1975,8 @@ class App(ctk.CTk):
             self.update_insta_status("Please select the Reel to download.", 1.0, error=True)
             return
             
-        self.is_processing = True
-        self.insta_fetch_btn.configure(state="disabled")
-        self.insta_download_btn.configure(state="disabled")
-        
-        self.insta_down_status_label.grid()
-        self.insta_down_progress.grid()
-        
-        threading.Thread(target=self.insta_download_thread_fn, args=(self.insta_reel_data,), daemon=True).start()
+        self.add_to_download_queue(self.insta_reel_data['title'], self.insta_reel_data['url'], "instagram", "reel")
+        self.update_insta_status("Added Reel to download queue.", 1.0)
 
     def update_insta_download_progress(self, title, state_dict):
         percent = state_dict.get('percent', 0.0)
@@ -1952,15 +2230,8 @@ class App(ctk.CTk):
         if not self.video_data:
             return
             
-        self.is_processing = True
-        self.vid_fetch_btn.configure(state="disabled")
-        self.download_btn.configure(state="disabled")
-        
-        self.down_status_label.grid()
-        self.down_progress.grid()
-        
-        url = self.video_data['url']
-        threading.Thread(target=self.video_download_thread_fn, args=(url,), daemon=True).start()
+        self.add_to_download_queue(self.video_data['title'], self.video_data['url'], "youtube", "video")
+        self.update_video_status("Added video to download queue.", 1.0)
 
     def video_download_thread_fn(self, url):
         download_folder = self.download_dir.get()
@@ -1998,6 +2269,283 @@ class App(ctk.CTk):
         else:
             self.down_status_label.configure(text="Download failed. Check URL or connection.", text_color="#f38ba8")
             self.down_progress.set(0)
+
+    # --- TABS FOR INSTAGRAM SCREEN ---
+    def on_insta_tab_changed(self, value):
+        if value == "Single Reel":
+            self.tab_insta_profile_frame.pack_forget()
+            self.tab_insta_single_frame.pack(fill="both", expand=True)
+            self.insta_download_btn.configure(text="Download Reel", command=self.start_insta_download)
+            if self.insta_reel_data:
+                self.insta_download_btn.configure(state="normal")
+            else:
+                self.insta_download_btn.configure(state="disabled")
+        elif value == "Profile Scraper":
+            self.tab_insta_single_frame.pack_forget()
+            self.tab_insta_profile_frame.pack(fill="both", expand=True)
+            self.insta_download_btn.configure(text="Download Selected Reels", command=self.start_insta_profile_download)
+            if self.insta_profile_cards:
+                self.insta_download_btn.configure(state="normal")
+            else:
+                self.insta_download_btn.configure(state="disabled")
+
+    # --- INSTAGRAM PROFILE SCRAPER ---
+    def start_insta_profile_fetch(self):
+        username = self.insta_profile_entry.get().strip()
+        if not username:
+            self.update_insta_profile_status("Please enter a username.", 1.0, error=True)
+            return
+            
+        self.is_processing = True
+        self.insta_profile_fetch_btn.configure(state="disabled")
+        self.insta_profile_progress.configure(mode="indeterminate")
+        self.insta_profile_progress.start()
+        self.update_insta_profile_status(f"Scraping Reels from @{username}...", 0.5)
+        
+        threading.Thread(target=self.insta_profile_fetch_worker, args=(username,), daemon=True).start()
+
+    def update_insta_profile_status(self, text, progress_val, error=False):
+        self.insta_profile_status_label.configure(
+            text=text,
+            text_color="#f38ba8" if error else ("#a6e3a1" if progress_val == 1.0 else "#f9e2af")
+        )
+        self.insta_profile_progress.set(progress_val)
+
+    def insta_profile_fetch_worker(self, username):
+        # Read saved auth credentials
+        auth_username = None
+        config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+        if os.path.exists(config_path):
+            try:
+                import crypto_utils
+                with open(config_path, "r", encoding="utf-8") as f:
+                    enc_str = f.read().strip()
+                creds = crypto_utils.decrypt_credentials(enc_str)
+                if creds:
+                    auth_username = creds[0]
+            except Exception as e:
+                print(f"Error loading username: {e}")
+                
+        session_dir = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+            "Instaloader"
+        )
+        
+        try:
+            import downloader
+            reels = downloader.get_insta_profile_reels(username, session_dir, auth_username)
+            self.after(0, lambda r=reels: self.finish_insta_profile_fetch(r))
+        except Exception as e:
+            self.after(0, lambda msg=str(e): self.finish_insta_profile_fetch_error(msg))
+
+    def finish_insta_profile_fetch(self, reels):
+        self.is_processing = False
+        self.insta_profile_fetch_btn.configure(state="normal")
+        self.insta_profile_progress.stop()
+        self.insta_profile_progress.configure(mode="determinate")
+        self.insta_profile_progress.set(1.0)
+        
+        # Clear old scroll widgets
+        for widget in self.insta_profile_scroll_frame.winfo_children():
+            widget.destroy()
+            
+        self.insta_profile_cards = []
+        self.insta_profile_reels_list = reels
+        
+        if not reels:
+            self.update_insta_profile_status("No video posts / Reels found on profile.", 1.0, error=True)
+            self.insta_download_btn.configure(state="disabled")
+            return
+            
+        self.update_insta_profile_status(f"Found {len(reels)} Reels.", 1.0)
+        
+        for reel in reels:
+            card = ReelCard(self.insta_profile_scroll_frame, reel)
+            card.pack(fill="x", padx=10, pady=5)
+            self.insta_profile_cards.append(card)
+            
+        self.insta_download_btn.configure(state="normal")
+
+    def finish_insta_profile_fetch_error(self, msg):
+        self.is_processing = False
+        self.insta_profile_fetch_btn.configure(state="normal")
+        self.insta_profile_progress.stop()
+        self.insta_profile_progress.configure(mode="determinate")
+        self.insta_profile_progress.set(0)
+        self.update_insta_profile_status(f"Error: {msg}", 1.0, error=True)
+        self.insta_download_btn.configure(state="disabled")
+
+    def start_insta_profile_download(self):
+        selected_reels = []
+        for idx, card in enumerate(self.insta_profile_cards):
+            if card.is_selected():
+                selected_reels.append(self.insta_profile_reels_list[idx])
+                
+        if not selected_reels:
+            self.update_insta_profile_status("Please select at least one Reel to download.", 1.0, error=True)
+            return
+            
+        for reel in selected_reels:
+            self.add_to_download_queue(reel['title'], reel['url'], "instagram", "reel")
+            
+        self.update_insta_profile_status(f"Added {len(selected_reels)} Reels to download queue.", 1.0)
+
+    # --- AUTO-CLIPBOARD DETECT ---
+    def toggle_clipboard_monitor(self):
+        if self.monitor_clipboard.get():
+            self.last_clipboard_text = ""
+            threading.Thread(target=self.clipboard_monitor_thread, daemon=True).start()
+
+    def clipboard_monitor_thread(self):
+        import time
+        while self.monitor_clipboard.get():
+            try:
+                text = self.clipboard_get().strip()
+                if text and text != self.last_clipboard_text:
+                    self.last_clipboard_text = text
+                    # Simple validation
+                    is_yt = "youtube.com" in text or "youtu.be" in text
+                    is_insta = "instagram.com" in text
+                    
+                    if is_yt:
+                        self.after(0, lambda url=text: self.handle_clipboard_link(url, "youtube"))
+                    elif is_insta:
+                        self.after(0, lambda url=text: self.handle_clipboard_link(url, "instagram"))
+            except Exception:
+                pass
+            time.sleep(1.5)
+
+    def handle_clipboard_link(self, url, platform):
+        if platform == "youtube":
+            self.show_youtube_downloader()
+            self.yt_tab_control.set("Video Downloader")
+            self.on_yt_tab_changed("Video Downloader")
+            self.vid_url_entry.delete(0, "end")
+            self.vid_url_entry.insert(0, url)
+            self.start_video_fetch()
+        elif platform == "instagram":
+            self.show_instagram_downloader()
+            self.insta_tab_control.set("Single Reel")
+            self.on_insta_tab_changed("Single Reel")
+            self.insta_url_entry.delete(0, "end")
+            self.insta_url_entry.insert(0, url)
+            self.start_insta_fetch()
+
+    # --- PARALLEL QUEUE MANAGER ---
+    def show_queue_panel(self):
+        if not self.queue_frame.winfo_manager():
+            self.queue_frame.pack(side="bottom", fill="x", padx=20, pady=(5, 10))
+
+    def hide_queue_panel(self):
+        if self.queue_frame.winfo_manager():
+            self.queue_frame.pack_forget()
+
+    def add_to_download_queue(self, title, url, platform, download_type):
+        self.task_counter += 1
+        task_id = f"task_{self.task_counter}"
+        
+        self.show_queue_panel()
+        
+        row = ctk.CTkFrame(self.queue_scroll, fg_color="transparent")
+        row.pack(fill="x", pady=2, padx=5)
+        
+        display_title = title if len(title) <= 35 else title[:32] + "..."
+        title_lbl = ctk.CTkLabel(row, text=display_title, font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#cdd6f4", anchor="w")
+        title_lbl.pack(side="left", padx=5)
+        
+        info_frame = ctk.CTkFrame(row, fg_color="transparent")
+        info_frame.pack(side="right", fill="y", padx=5)
+        
+        status_lbl = ctk.CTkLabel(info_frame, text="Queued...", font=ctk.CTkFont(family="Segoe UI", size=10), text_color="#a6adc8", width=160, anchor="e")
+        status_lbl.pack(side="left", padx=5)
+        
+        prog_bar = ctk.CTkProgressBar(info_frame, width=100, height=8, fg_color="#313244", progress_color="#a6e3a1")
+        prog_bar.pack(side="right", padx=5, pady=6)
+        prog_bar.set(0)
+        
+        self.queue_tasks[task_id] = {
+            'row': row,
+            'title_lbl': title_lbl,
+            'status_lbl': status_lbl,
+            'prog_bar': prog_bar,
+            'status': 'queued'
+        }
+        
+        dest_dir = self.download_dir.get()
+        format_preset = self.format_option.get() if platform == "instagram" else self.yt_format_option.get()
+        
+        self.executor.submit(self.queue_download_worker, task_id, title, url, platform, download_type, format_preset, dest_dir)
+
+    def queue_download_worker(self, task_id, title, url, platform, download_type, format_preset, dest_dir):
+        def progress_cb(d):
+            if d['status'] == 'downloading':
+                percent = d.get('percent', 0.0)
+                speed = d.get('speed', 'N/A')
+                eta = d.get('eta', 'N/A')
+                self.after(0, lambda: self.update_queue_ui(task_id, percent, speed, eta, 'downloading'))
+            elif d['status'] == 'finished':
+                self.after(0, lambda: self.update_queue_ui(task_id, 100.0, '0', '0', 'finishing'))
+                
+        self.after(0, lambda: self.update_queue_ui(task_id, 0.0, 'N/A', 'N/A', 'downloading'))
+        
+        success = False
+        try:
+            import downloader
+            if platform == "youtube":
+                if download_type == "short":
+                    downloader.download_short(url, dest_dir, progress_callback=progress_cb, format_preset=format_preset)
+                else:
+                    downloader.download_youtube_video(url, dest_dir, progress_callback=progress_cb, format_preset=format_preset)
+            elif platform == "instagram":
+                # Check cookies session setup
+                ydl_opts = None
+                if hasattr(self, 'insta_session_dir') and hasattr(self, 'insta_username'):
+                    session_file = os.path.join(self.insta_session_dir, f"session-{self.insta_username}")
+                    if os.path.exists(session_file):
+                        pass
+                downloader.download_insta_reel(url, dest_dir, ydl_opts=ydl_opts, progress_callback=progress_cb, format_preset=format_preset)
+            success = True
+        except Exception as e:
+            print(f"Queue download error: {e}")
+            
+        status = 'completed' if success else 'failed'
+        self.after(0, lambda: self.update_queue_ui(task_id, 100.0 if success else 0.0, '', '', status))
+
+    def update_queue_ui(self, task_id, percent, speed, eta, status):
+        task = self.queue_tasks.get(task_id)
+        if not task:
+            return
+            
+        task['status'] = status
+        
+        if status == 'downloading':
+            task['prog_bar'].set(percent / 100.0)
+            task['status_lbl'].configure(text=f"{percent:.1f}% | {speed} | {eta}", text_color="#f9e2af")
+        elif status == 'finishing':
+            task['prog_bar'].set(1.0)
+            task['status_lbl'].configure(text="Processing/Merging...", text_color="#89b4fa")
+        elif status == 'completed':
+            task['prog_bar'].set(1.0)
+            task['prog_bar'].configure(progress_color="#a6e3a1")
+            task['status_lbl'].configure(text="Finished! ✅", text_color="#a6e3a1")
+            self.after(5000, lambda: self.remove_task_from_queue_ui(task_id))
+        elif status == 'failed':
+            task['prog_bar'].set(0)
+            task['prog_bar'].configure(progress_color="#f38ba8")
+            task['status_lbl'].configure(text="Failed ❌", text_color="#f38ba8")
+            self.after(5000, lambda: self.remove_task_from_queue_ui(task_id))
+
+    def remove_task_from_queue_ui(self, task_id):
+        task = self.queue_tasks.pop(task_id, None)
+        if task:
+            try:
+                task['row'].pack_forget()
+                task['row'].destroy()
+            except:
+                pass
+        
+        if not self.queue_tasks:
+            self.hide_queue_panel()
 
 if __name__ == "__main__":
     import traceback

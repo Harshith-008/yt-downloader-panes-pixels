@@ -93,7 +93,30 @@ def get_top_shorts(channel_url, progress_callback=None, limit=100):
             
         return top_10
 
-def download_short(video_url, download_dir, progress_callback=None):
+def get_ydl_format_options(format_preset):
+    opts = {}
+    if format_preset == "Audio Only (MP3)":
+        opts['format'] = 'bestaudio/best'
+        opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+    elif format_preset == "1080p (Video)":
+        opts['format'] = 'bestvideo[height<=1080]+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
+    elif format_preset == "720p (Video)":
+        opts['format'] = 'bestvideo[height<=720]+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
+    elif format_preset == "480p (Video)":
+        opts['format'] = 'bestvideo[height<=480]+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
+    else:
+        opts['format'] = 'bestvideo+bestaudio/best'
+        opts['merge_output_format'] = 'mp4'
+    return opts
+
+def download_short(video_url, download_dir, progress_callback=None, format_preset="Best Quality (Video)"):
     """
     Downloads a single short using yt-dlp.
     progress_callback receives a dictionary with progress info.
@@ -126,23 +149,21 @@ def download_short(video_url, download_dir, progress_callback=None):
 
     ydl_opts = {
         'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
         'progress_hooks': [ytdl_hook],
         'quiet': True,
         'no_warnings': True,
     }
     
+    # Merge format options based on preset
+    ydl_opts.update(get_ydl_format_options(format_preset))
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
         filename = ydl.prepare_filename(info)
-        # Handle case where file extension changes during merge (e.g. mkv/mp4)
         base, _ = os.path.splitext(filename)
-        # Search if the file exists with another extension, or check the actual file written
         if os.path.exists(filename):
             return filename
-        # Fallback search
-        for ext in ['.mp4', '.mkv', '.webm']:
+        for ext in ['.mp4', '.mkv', '.webm', '.mp3']:
             if os.path.exists(base + ext):
                 return base + ext
         return filename
@@ -278,7 +299,7 @@ def get_insta_reel_info(reel_url):
         raise Exception("Instagram blocked anonymous access. Make sure you are logged into Instagram in Chrome or Edge, or try a different link.")
     raise Exception(f"Failed to fetch Reel: {last_err}")
 
-def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback=None):
+def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback=None, format_preset="Best Quality (Video)"):
     """
     Downloads a single Instagram Reel using working ydl_opts.
     """
@@ -311,12 +332,11 @@ def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback
     opts = ydl_opts.copy() if ydl_opts else {'quiet': True, 'no_warnings': True}
     opts.update({
         'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
         'progress_hooks': [ytdl_hook],
         'quiet': True,
         'no_warnings': True,
     })
+    opts.update(get_ydl_format_options(format_preset))
     
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(reel_url, download=True)
@@ -324,7 +344,7 @@ def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback
         base, _ = os.path.splitext(filename)
         if os.path.exists(filename):
             return filename
-        for ext in ['.mp4', '.mkv', '.webm']:
+        for ext in ['.mp4', '.mkv', '.webm', '.mp3']:
             if os.path.exists(base + ext):
                 return base + ext
         return filename
@@ -434,7 +454,7 @@ def get_youtube_video_info(video_url):
             'url': video_url
         }
 
-def download_youtube_video(video_url, download_dir, progress_callback=None):
+def download_youtube_video(video_url, download_dir, progress_callback=None, format_preset="Best Quality (Video)"):
     """
     Downloads a regular YouTube video using a progress callback.
     """
@@ -466,12 +486,11 @@ def download_youtube_video(video_url, download_dir, progress_callback=None):
 
     opts = {
         'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
         'progress_hooks': [ytdl_hook],
         'quiet': True,
         'no_warnings': True,
     }
+    opts.update(get_ydl_format_options(format_preset))
     
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
@@ -479,8 +498,52 @@ def download_youtube_video(video_url, download_dir, progress_callback=None):
         base, _ = os.path.splitext(filename)
         if os.path.exists(filename):
             return filename
-        for ext in ['.mp4', '.mkv', '.webm']:
+        for ext in ['.mp4', '.mkv', '.webm', '.mp3']:
             if os.path.exists(base + ext):
                 return base + ext
         return filename
+
+def get_insta_profile_reels(target_username, session_dir, auth_username=None):
+    """
+    Scrapes the 12 most recent Reels/videos from an Instagram profile.
+    Uses saved login session if available.
+    """
+    import instaloader
+    L = instaloader.Instaloader(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    if auth_username and session_dir:
+        session_file = os.path.join(session_dir, f"session-{auth_username}")
+        if os.path.exists(session_file):
+            try:
+                L.load_session_from_file(auth_username, filename=session_file)
+            except Exception as e:
+                print(f"Error loading session in profile scraper: {e}")
+                
+    try:
+        profile = instaloader.Profile.from_username(L.context, target_username)
+        posts = profile.get_posts()
+        
+        reels_list = []
+        count = 0
+        for post in posts:
+            if post.is_video:
+                caption = post.caption or "Instagram Reel"
+                caption = caption.split('\n')[0].strip()
+                if len(caption) > 80:
+                    caption = caption[:80] + "..."
+                    
+                reels_list.append({
+                    'id': post.shortcode,
+                    'title': caption,
+                    'views': post.video_view_count or 0,
+                    'duration': int(post.video_duration or 0),
+                    'thumbnail': post.url,
+                    'url': f"https://www.instagram.com/reel/{post.shortcode}/"
+                })
+                count += 1
+                if count >= 12:
+                    break
+        return reels_list
+    except Exception as e:
+        raise Exception(f"Failed to load profile details: {e}")
 
