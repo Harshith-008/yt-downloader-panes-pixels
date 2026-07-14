@@ -622,101 +622,485 @@ def load_cookies_to_instaloader(L):
                 print(f"Error loading cookies from {path}: {e}")
     return False
 
-def get_instagram_profile_robust(L, username):
-    import re
-    import instaloader
+
+class SessionExpiredError(Exception):
+    """Raised when the Instagram session is expired and re-login is needed."""
+    pass
+
+
+def instagram_web_login(username, password):
+    """
+    Login to Instagram via the web AJAX endpoint (same flow as the browser).
+    Returns a requests.Session with valid cookies on success.
+    Raises Exception with descriptive message on failure.
+    """
+    import requests
+    import time
+    import json
     
-    # Strategy 1: Try api/v1/users/web_profile_info/
-    print("Attempting to lookup profile ID via web_profile_info API...")
-    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'X-IG-App-ID': '936619743392459',
-        'Accept': '*/*',
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Referer': 'https://www.instagram.com/',
+    })
+    
+    # Step 1: Get CSRF token from homepage
+    r1 = session.get("https://www.instagram.com/", timeout=15)
+    csrf = session.cookies.get("csrftoken", "")
+    if not csrf:
+        match = re.search(r'"csrf_token":"([^"]+)"', r1.text)
+        if match:
+            csrf = match.group(1)
+    if not csrf:
+        raise Exception("Could not get CSRF token from Instagram. Please try again later.")
+    
+    # Step 2: Send login request
+    login_data = {
+        "username": username,
+        "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:{int(time.time())}:{password}",
+        "queryParams": "{}",
+        "optIntoOneTap": "false",
+        "stopDeletionNonce": "",
+        "trustedDeviceRecords": "{}",
     }
+    login_headers = {
+        'X-CSRFToken': csrf,
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-IG-App-ID': '936619743392459',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': 'https://www.instagram.com/accounts/login/',
+    }
+    
+    r2 = session.post("https://www.instagram.com/accounts/login/ajax/",
+                      data=login_data, headers=login_headers, timeout=15)
+    
     try:
-        r = L.context._session.get(url, headers=headers, timeout=10)
+        resp = r2.json()
+    except Exception:
+        raise Exception(f"Instagram returned an unexpected response (HTTP {r2.status_code}). Please try again later.")
+    
+    if resp.get("authenticated"):
+        print("Instagram web login succeeded!")
+        return session
+    elif resp.get("two_factor_required"):
+        raise Exception("TWO_FACTOR_REQUIRED")
+    elif resp.get("checkpoint_url"):
+        raise Exception(
+            f"Instagram requires a security checkpoint. Please open Instagram in your browser, "
+            f"complete the checkpoint at {resp.get('checkpoint_url')}, then try again."
+        )
+    elif resp.get("error_type") == "UserInvalidCredentials":
+        raise Exception("Incorrect password. Please check your password and try again.")
+    else:
+        msg = resp.get("message") or resp.get("error_type") or "Unknown error"
+        raise Exception(f"Login failed: {msg}")
+
+
+def save_instagram_session(session, username, session_dir):
+    """Save a requests.Session's Instagram cookies to disk for reuse."""
+    import json
+    os.makedirs(session_dir, exist_ok=True)
+    session_file = os.path.join(session_dir, f"insta_web_session_{username}.json")
+    
+    cookies_dict = {}
+    for c in session.cookies:
+        if "instagram.com" in c.domain:
+            cookies_dict[c.name] = {
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path,
+            }
+    
+    with open(session_file, "w", encoding="utf-8") as f:
+        json.dump(cookies_dict, f)
+    print(f"Saved Instagram web session to {session_file}")
+
+
+def load_instagram_session(username, session_dir):
+    """
+    Load a previously saved Instagram web session from disk.
+    Returns a requests.Session with cookies set, or None if not found/invalid.
+    """
+    import json
+    import requests
+    
+    session_file = os.path.join(session_dir, f"insta_web_session_{username}.json")
+    if not os.path.exists(session_file):
+        return None
+    
+    try:
+        with open(session_file, "r", encoding="utf-8") as f:
+            cookies_dict = json.load(f)
+        
+        if not cookies_dict.get("sessionid"):
+            return None
+        
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        })
+        for name, info in cookies_dict.items():
+            session.cookies.set(name, info["value"], domain=info["domain"], path=info["path"])
+        
+        print(f"Loaded Instagram web session for {username}")
+        return session
+    except Exception as e:
+        print(f"Failed to load session: {e}")
+        return None
+
+
+def verify_instagram_session(session):
+    """Check if an Instagram web session is still valid. Returns True/False."""
+    try:
+        r = session.get("https://www.instagram.com/accounts/edit/", 
+                        headers={'X-IG-App-ID': '936619743392459'},
+                        timeout=10, allow_redirects=False)
+        # If it redirects to login, session is expired
+        if r.status_code in (301, 302) and "login" in r.headers.get("Location", ""):
+            return False
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def get_instagram_user_id(session, username):
+    """
+    Get an Instagram user's numeric ID using multiple strategies.
+    Requires an authenticated requests.Session.
+    Returns (user_id, user_info_dict) on success.
+    Raises SessionExpiredError if the session is invalid.
+    Raises Exception if the user cannot be found.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'X-IG-App-ID': '936619743392459',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': 'https://www.instagram.com/',
+    }
+    csrf = session.cookies.get("csrftoken", "")
+    if csrf:
+        headers['X-CSRFToken'] = csrf
+    
+    # Strategy 1: web_profile_info API
+    print(f"[Profile Lookup] Strategy 1: web_profile_info for '{username}'...")
+    try:
+        url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        r = session.get(url, headers=headers, timeout=10)
+        print(f"  Status: {r.status_code}")
+        
         if r.status_code == 200:
             data = r.json()
-            user_data = data.get("data", {}).get("user", {})
-            if user_data and "id" in user_data:
-                user_id = int(user_data["id"])
-                print(f"Success: extracted user ID {user_id} via web_profile_info.")
-                return instaloader.Profile.from_id(L.context, user_id)
+            user = data.get("data", {}).get("user")
+            if user and user.get("id"):
+                uid = int(user["id"])
+                print(f"  Found user ID: {uid}")
+                return uid, user
+        elif r.status_code in (401, 403):
+            print("  Session appears expired (401/403)")
+            raise SessionExpiredError("Instagram session expired. Please re-login.")
+        elif r.status_code == 429:
+            print("  Rate limited (429), trying next strategy...")
+    except SessionExpiredError:
+        raise
     except Exception as e:
-        print(f"web_profile_info API lookup failed: {e}")
+        print(f"  web_profile_info failed: {e}")
+    
+    # Strategy 2: topsearch API
+    print(f"[Profile Lookup] Strategy 2: topsearch for '{username}'...")
+    try:
+        search_url = f"https://www.instagram.com/web/search/topsearch/?query={username}&context=user"
+        r2 = session.get(search_url, headers=headers, timeout=10)
+        print(f"  Status: {r2.status_code}")
         
-    # Strategy 2: Try scraping profile HTML for user ID
-    print("Attempting to lookup profile ID via HTML parsing...")
+        if r2.status_code == 200:
+            data2 = r2.json()
+            for u in data2.get("users", []):
+                user_node = u.get("user", {})
+                if user_node.get("username", "").lower() == username.lower():
+                    uid = int(user_node.get("pk") or user_node.get("id", 0))
+                    if uid:
+                        print(f"  Found exact match: ID={uid}")
+                        return uid, user_node
+            # If no exact match, try the first result
+            if data2.get("users"):
+                first = data2["users"][0].get("user", {})
+                if first.get("username", "").lower() == username.lower():
+                    uid = int(first.get("pk") or first.get("id", 0))
+                    if uid:
+                        print(f"  Found first match: ID={uid}")
+                        return uid, first
+        elif r2.status_code in (401, 403):
+            raise SessionExpiredError("Instagram session expired. Please re-login.")
+    except SessionExpiredError:
+        raise
+    except Exception as e:
+        print(f"  topsearch failed: {e}")
+    
+    # Strategy 3: Scrape profile HTML page for user ID
+    print(f"[Profile Lookup] Strategy 3: HTML scraping for '{username}'...")
     try:
         page_url = f"https://www.instagram.com/{username}/"
-        page_r = L.context._session.get(page_url, headers=headers, timeout=10)
-        if page_r.status_code == 200:
-            html = page_r.text
+        r3 = session.get(page_url, headers={
+            'User-Agent': headers['User-Agent'],
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }, timeout=10)
+        print(f"  Page status: {r3.status_code}")
+        
+        if r3.status_code == 200:
+            html = r3.text
             
-            # Pattern 1
+            # Pattern: profilePage_USERID
             match = re.search(r'profilePage_([0-9]+)', html)
             if match:
-                user_id = int(match.group(1))
-                print(f"Success: extracted user ID {user_id} via profilePage pattern.")
-                return instaloader.Profile.from_id(L.context, user_id)
-                
-            # Pattern 2
-            match = re.search(r'"profile_owner"\s*:\s*\{\s*"id"\s*:\s*"([0-9]+)"', html)
+                uid = int(match.group(1))
+                print(f"  Found via profilePage pattern: {uid}")
+                return uid, {"id": str(uid), "username": username}
+            
+            # Pattern: "user_id":"USERID"
+            match = re.search(r'"user_id"\s*:\s*"([0-9]+)"', html)
             if match:
-                user_id = int(match.group(1))
-                print(f"Success: extracted user ID {user_id} via profile_owner pattern.")
-                return instaloader.Profile.from_id(L.context, user_id)
-                
-            # Pattern 3
+                uid = int(match.group(1))
+                print(f"  Found via user_id pattern: {uid}")
+                return uid, {"id": str(uid), "username": username}
+            
+            # Pattern: in script tags
             scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
             for script in scripts:
-                if username in script:
-                    match = re.search(r'"id"\s*:\s*"([0-9]+)"', script)
+                if username.lower() in script.lower():
+                    match = re.search(r'"id"\s*:\s*"([0-9]{5,})"', script)
                     if match:
-                        user_id = int(match.group(1))
-                        print(f"Success: extracted user ID {user_id} from script tags.")
-                        return instaloader.Profile.from_id(L.context, user_id)
+                        uid = int(match.group(1))
+                        print(f"  Found via script tag: {uid}")
+                        return uid, {"id": str(uid), "username": username}
+        elif r3.status_code in (401, 403):
+            raise SessionExpiredError("Instagram session expired. Please re-login.")
+    except SessionExpiredError:
+        raise
     except Exception as e:
-        print(f"HTML parsing lookup failed: {e}")
-        
-    # Strategy 3: Default Instaloader search lookup
-    print("Falling back to default Instaloader search lookup...")
-    return instaloader.Profile.from_username(L.context, username)
+        print(f"  HTML scraping failed: {e}")
+    
+    raise Exception(
+        f"Could not find Instagram profile '{username}'. "
+        f"Please verify the username is correct and the account is public."
+    )
 
-def get_insta_profile_reels(target_username, session_dir, auth_username=None):
+
+def get_user_reels_via_api(session, user_id, username, max_count=12):
+    """
+    Fetch recent reels/video posts from a user using Instagram's API.
+    Returns a list of reel dicts with id, title, views, duration, thumbnail, url.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'X-IG-App-ID': '936619743392459',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': f'https://www.instagram.com/{username}/',
+    }
+    csrf = session.cookies.get("csrftoken", "")
+    if csrf:
+        headers['X-CSRFToken'] = csrf
+    
+    reels_list = []
+    
+    # Strategy 1: Try clips (reels) endpoint
+    print(f"[Reels] Fetching clips for user_id={user_id}...")
+    try:
+        clips_url = f"https://i.instagram.com/api/v1/clips/user/"
+        clips_data = {
+            "target_user_id": str(user_id),
+            "page_size": str(max_count),
+            "include_feed_video": "true",
+        }
+        r = session.post(clips_url, data=clips_data, headers=headers, timeout=15)
+        print(f"  Clips endpoint status: {r.status_code}")
+        
+        if r.status_code == 200:
+            data = r.json()
+            items = data.get("items", [])
+            for item in items[:max_count]:
+                media = item.get("media", {})
+                if media:
+                    code = media.get("code", "")
+                    caption_obj = media.get("caption")
+                    caption = caption_obj.get("text", "Instagram Reel") if caption_obj else "Instagram Reel"
+                    caption = caption.split('\n')[0].strip()
+                    if len(caption) > 80:
+                        caption = caption[:80] + "..."
+                    
+                    thumb = ""
+                    candidates = media.get("image_versions2", {}).get("candidates", [])
+                    if candidates:
+                        thumb = candidates[0].get("url", "")
+                    
+                    reels_list.append({
+                        'id': code,
+                        'title': caption,
+                        'views': media.get("play_count") or media.get("view_count") or 0,
+                        'duration': int(media.get("video_duration", 0)),
+                        'thumbnail': thumb,
+                        'url': f"https://www.instagram.com/reel/{code}/"
+                    })
+            
+            if reels_list:
+                print(f"  Got {len(reels_list)} reels from clips endpoint.")
+                return reels_list
+        elif r.status_code in (401, 403):
+            raise SessionExpiredError("Instagram session expired. Please re-login.")
+    except SessionExpiredError:
+        raise
+    except Exception as e:
+        print(f"  Clips endpoint failed: {e}")
+    
+    # Strategy 2: Fall back to user feed (timeline media)
+    print(f"[Reels] Falling back to user feed endpoint...")
+    try:
+        feed_url = f"https://i.instagram.com/api/v1/feed/user/{user_id}/?count={max_count * 2}"
+        r2 = session.get(feed_url, headers=headers, timeout=15)
+        print(f"  Feed endpoint status: {r2.status_code}")
+        
+        if r2.status_code == 200:
+            data2 = r2.json()
+            items = data2.get("items", [])
+            for item in items:
+                if item.get("media_type") == 2 or item.get("video_versions"):  # video
+                    code = item.get("code", "")
+                    caption_obj = item.get("caption")
+                    caption = caption_obj.get("text", "Instagram Video") if caption_obj else "Instagram Video"
+                    caption = caption.split('\n')[0].strip()
+                    if len(caption) > 80:
+                        caption = caption[:80] + "..."
+                    
+                    thumb = ""
+                    candidates = item.get("image_versions2", {}).get("candidates", [])
+                    if candidates:
+                        thumb = candidates[0].get("url", "")
+                    
+                    reels_list.append({
+                        'id': code,
+                        'title': caption,
+                        'views': item.get("play_count") or item.get("view_count") or 0,
+                        'duration': int(item.get("video_duration", 0)),
+                        'thumbnail': thumb,
+                        'url': f"https://www.instagram.com/reel/{code}/"
+                    })
+                    
+                    if len(reels_list) >= max_count:
+                        break
+            
+            if reels_list:
+                print(f"  Got {len(reels_list)} videos from feed endpoint.")
+                return reels_list
+        elif r2.status_code in (401, 403):
+            raise SessionExpiredError("Instagram session expired. Please re-login.")
+    except SessionExpiredError:
+        raise
+    except Exception as e:
+        print(f"  Feed endpoint failed: {e}")
+    
+    return reels_list
+
+
+def get_insta_profile_reels(target_username, session_dir, auth_username=None, auth_password=None):
     """
     Scrapes the 12 most recent Reels/videos from an Instagram profile.
-    Uses saved login session if available, with robust cookie fallbacks and direct ID extraction.
-    """
-    import instaloader
-    L = instaloader.Instaloader(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    Uses a multi-strategy approach:
+      1. Direct Instagram web session (web_profile_info + clips API)
+      2. Instaloader with session as fallback
     
-    if auth_username and session_dir:
-        session_file = os.path.join(session_dir, f"session-{auth_username}")
-        if os.path.exists(session_file):
-            try:
-                L.load_session_from_file(auth_username, filename=session_file)
-            except Exception as e:
-                print(f"Error loading session in profile scraper: {e}")
-                
+    Raises SessionExpiredError if re-login is needed.
+    """
+    import json
+    
+    # --- Resolve the session_dir for web sessions ---
+    web_session_dir = session_dir or os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+        "Instaloader"
+    )
+    
+    # --- Step 1: Try to get or create a web session ---
+    session = None
+    
+    # Try loading saved web session
+    if auth_username:
+        session = load_instagram_session(auth_username, web_session_dir)
+    
+    # If no saved session, try to create one if we have credentials
+    if session is None and auth_username and auth_password:
+        print("[Session] No saved session. Creating new one with credentials...")
+        try:
+            session = instagram_web_login(auth_username, auth_password)
+            save_instagram_session(session, auth_username, web_session_dir)
+        except Exception as e:
+            err_msg = str(e)
+            if "TWO_FACTOR_REQUIRED" in err_msg:
+                raise
+            print(f"[Session] Web login failed: {e}")
+    
+    # If we have a session, try the direct API approach
+    if session:
+        try:
+            user_id, user_info = get_instagram_user_id(session, target_username)
+            reels = get_user_reels_via_api(session, user_id, target_username)
+            if reels:
+                return reels
+            else:
+                print("[Reels] Direct API returned no reels, trying instaloader fallback...")
+        except SessionExpiredError:
+            # Delete stale session file
+            if auth_username:
+                stale = os.path.join(web_session_dir, f"insta_web_session_{auth_username}.json")
+                if os.path.exists(stale):
+                    os.remove(stale)
+            raise
+        except Exception as e:
+            print(f"[Direct API] Failed: {e}. Trying instaloader fallback...")
+    
+    # --- Step 2: Instaloader fallback ---
+    print("[Fallback] Trying instaloader...")
     try:
-        profile = get_instagram_profile_robust(L, target_username)
-    except Exception as first_err:
-        print(f"First attempt to load profile failed: {first_err}. Trying cookie fallback...")
-        if load_cookies_to_instaloader(L):
-            try:
-                profile = get_instagram_profile_robust(L, target_username)
-            except Exception as second_err:
-                raise Exception(f"Profile '{target_username}' not found or loading restricted: {second_err}")
-        else:
-            raise Exception(f"Instagram profile '{target_username}' lookup failed. (Please verify your username, check if the account is public, or update your Login Settings/cookies.txt): {first_err}")
-            
-    try:
-        posts = profile.get_posts()
+        import instaloader
+        L = instaloader.Instaloader(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+        )
         
+        # Load instaloader session
+        if auth_username and session_dir:
+            session_file = os.path.join(session_dir, f"session-{auth_username}")
+            if os.path.exists(session_file):
+                try:
+                    L.load_session_from_file(auth_username, filename=session_file)
+                except Exception as e:
+                    print(f"[Instaloader] Error loading session: {e}")
+        
+        # If we got a user_id from the direct API, use from_id
+        if session and 'user_id' in dir():
+            try:
+                profile = instaloader.Profile.from_id(L.context, user_id)
+            except Exception:
+                profile = None
+        else:
+            profile = None
+        
+        # Try from_username as last resort
+        if profile is None:
+            try:
+                profile = instaloader.Profile.from_username(L.context, target_username)
+            except Exception as e:
+                # If everything failed and we have no session at all, ask for login
+                if session is None:
+                    raise SessionExpiredError(
+                        "No active Instagram session. Please enter your Instagram credentials "
+                        "in Login Settings to enable profile scraping."
+                    )
+                raise Exception(
+                    f"Could not find profile '{target_username}'. "
+                    f"Please verify the username is correct. Error: {e}"
+                )
+        
+        # Fetch posts/reels
+        posts = profile.get_posts()
         reels_list = []
         count = 0
         for post in posts:
@@ -725,7 +1109,7 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None):
                 caption = caption.split('\n')[0].strip()
                 if len(caption) > 80:
                     caption = caption[:80] + "..."
-                    
+                
                 reels_list.append({
                     'id': post.shortcode,
                     'title': caption,
@@ -738,6 +1122,14 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None):
                 if count >= 12:
                     break
         return reels_list
+    except SessionExpiredError:
+        raise
     except Exception as e:
-        raise Exception(f"Failed to extract profile Reels: {e}")
+        if session is None and not auth_username:
+            raise SessionExpiredError(
+                "No Instagram credentials configured. Please enter your Instagram "
+                "username and password in Login Settings to use profile scraping."
+            )
+        raise Exception(f"Failed to fetch profile reels: {e}")
+
 

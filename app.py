@@ -756,22 +756,20 @@ class InstaLoginWindow(ctk.CTkToplevel):
         
     def login_worker(self, username, password):
         try:
-            import instaloader
-            from instaloader.exceptions import TwoFactorAuthRequiredException
-            
-            ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            L = instaloader.Instaloader(user_agent=ua)
+            import downloader
             
             try:
-                L.login(username, password)
-                session_file = os.path.join(
-                    os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
-                    "Instaloader",
-                    f"session-{username}"
-                )
-                os.makedirs(os.path.dirname(session_file), exist_ok=True)
-                L.save_session_to_file(filename=session_file)
+                # Use direct web login (same as browser)
+                session = downloader.instagram_web_login(username, password)
                 
+                # Save the web session
+                session_dir = os.path.join(
+                    os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+                    "Instaloader"
+                )
+                downloader.save_instagram_session(session, username, session_dir)
+                
+                # Save encrypted credentials
                 import crypto_utils
                 enc_str = crypto_utils.encrypt_credentials(username, password)
                 config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
@@ -779,10 +777,26 @@ class InstaLoginWindow(ctk.CTkToplevel):
                     f.write(enc_str)
                     
                 self.after(0, lambda: self.login_success())
-            except TwoFactorAuthRequiredException:
-                self.after(0, lambda: self.handle_2fa(L, username, password))
             except Exception as e:
-                self.after(0, lambda err=e: self.login_failed(f"Login failed: {err}"))
+                err_msg = str(e)
+                if "TWO_FACTOR_REQUIRED" in err_msg:
+                    # Fall back to instaloader for 2FA flow
+                    try:
+                        import instaloader
+                        from instaloader.exceptions import TwoFactorAuthRequiredException
+                        L = instaloader.Instaloader(
+                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+                        )
+                        try:
+                            L.login(username, password)
+                        except TwoFactorAuthRequiredException:
+                            self.after(0, lambda: self.handle_2fa(L, username, password))
+                            return
+                    except Exception:
+                        pass
+                    self.after(0, lambda: self.login_failed("2FA required but handler failed. Please try again."))
+                else:
+                    self.after(0, lambda err=e: self.login_failed(f"Login failed: {err}"))
         except Exception as e:
             self.after(0, lambda err=e: self.login_failed(f"Error: {err}"))
             
@@ -2342,6 +2356,7 @@ class App(ctk.CTk):
     def insta_profile_fetch_worker(self, username):
         # Read saved auth credentials
         auth_username = None
+        auth_password = None
         config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
         if os.path.exists(config_path):
             try:
@@ -2351,8 +2366,9 @@ class App(ctk.CTk):
                 creds = crypto_utils.decrypt_credentials(enc_str)
                 if creds:
                     auth_username = creds[0]
+                    auth_password = creds[1] if len(creds) > 1 else None
             except Exception as e:
-                print(f"Error loading username: {e}")
+                print(f"Error loading credentials: {e}")
                 
         session_dir = os.path.join(
             os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
@@ -2361,8 +2377,14 @@ class App(ctk.CTk):
         
         try:
             import downloader
-            reels = downloader.get_insta_profile_reels(username, session_dir, auth_username)
+            reels = downloader.get_insta_profile_reels(
+                username, session_dir, auth_username, auth_password
+            )
             self.after(0, lambda r=reels: self.finish_insta_profile_fetch(r))
+        except downloader.SessionExpiredError as e:
+            self.after(0, lambda msg=str(e): self.finish_insta_profile_fetch_error(
+                f"Session expired: {msg}"
+            ))
         except Exception as e:
             self.after(0, lambda msg=str(e): self.finish_insta_profile_fetch_error(msg))
 
