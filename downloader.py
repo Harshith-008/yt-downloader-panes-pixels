@@ -503,10 +503,36 @@ def download_youtube_video(video_url, download_dir, progress_callback=None, form
                 return base + ext
         return filename
 
+def load_cookies_to_instaloader(L):
+    import sys
+    import http.cookiejar
+    
+    app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    possible_paths = [
+        os.path.join(app_dir, "cookies.txt"),
+        os.path.join(os.path.expanduser("~"), "cookies.txt"),
+        os.path.join(os.path.expanduser("~"), "Downloads", "cookies.txt"),
+        os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta_cookies.txt")
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            try:
+                cookie_jar = http.cookiejar.MozillaCookieJar(path)
+                cookie_jar.load(ignore_discard=True, ignore_expires=True)
+                for cookie in cookie_jar:
+                    if "instagram.com" in cookie.domain:
+                        L.context._session.cookies.set_cookie(cookie)
+                print(f"Successfully loaded cookies into Instaloader from {path}")
+                return True
+            except Exception as e:
+                print(f"Error loading cookies from {path}: {e}")
+    return False
+
 def get_insta_profile_reels(target_username, session_dir, auth_username=None):
     """
     Scrapes the 12 most recent Reels/videos from an Instagram profile.
-    Uses saved login session if available.
+    Uses saved login session if available, with robust cookie fallbacks.
     """
     import instaloader
     L = instaloader.Instaloader(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -521,6 +547,17 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None):
                 
     try:
         profile = instaloader.Profile.from_username(L.context, target_username)
+    except Exception as first_err:
+        print(f"First attempt to load profile failed: {first_err}. Trying cookie fallback...")
+        if load_cookies_to_instaloader(L):
+            try:
+                profile = instaloader.Profile.from_username(L.context, target_username)
+            except Exception as second_err:
+                raise Exception(f"Profile '{target_username}' not found or loading restricted: {second_err}")
+        else:
+            raise Exception(f"Instagram profile '{target_username}' lookup failed. (Please verify your username, check if the account is public, or update your Login Settings/cookies.txt): {first_err}")
+            
+    try:
         posts = profile.get_posts()
         
         reels_list = []
@@ -545,5 +582,5 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None):
                     break
         return reels_list
     except Exception as e:
-        raise Exception(f"Failed to load profile details: {e}")
+        raise Exception(f"Failed to extract profile Reels: {e}")
 

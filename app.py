@@ -1475,9 +1475,8 @@ class App(ctk.CTk):
             command=self.on_insta_tab_changed,
             fg_color="#181825",
             selected_color="#cba6f7",
-            selected_text_color="#11111b",
             unselected_color="#1e1e2e",
-            unselected_text_color="#cdd6f4",
+            text_color="#cdd6f4",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
         )
         self.insta_tab_control.pack(padx=20, pady=(0, 10), fill="x")
@@ -2291,9 +2290,26 @@ class App(ctk.CTk):
 
     # --- INSTAGRAM PROFILE SCRAPER ---
     def start_insta_profile_fetch(self):
-        username = self.insta_profile_entry.get().strip()
+        raw_input = self.insta_profile_entry.get().strip()
+        if not raw_input:
+            self.update_insta_profile_status("Please enter a username or profile URL.", 1.0, error=True)
+            return
+            
+        # Extract username if a URL or handle is provided
+        username = raw_input
+        if "instagram.com/" in username or "http" in username:
+            parts = username.split("instagram.com/")
+            if len(parts) > 1:
+                path = parts[1]
+            else:
+                from urllib.parse import urlparse
+                path = urlparse(username).path.lstrip('/')
+            username = path.split('?')[0].split('/')[0].strip()
+        elif username.startswith('@'):
+            username = username[1:]
+            
         if not username:
-            self.update_insta_profile_status("Please enter a username.", 1.0, error=True)
+            self.update_insta_profile_status("Invalid username or URL.", 1.0, error=True)
             return
             
         self.is_processing = True
