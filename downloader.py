@@ -622,10 +622,74 @@ def load_cookies_to_instaloader(L):
                 print(f"Error loading cookies from {path}: {e}")
     return False
 
+def get_instagram_profile_robust(L, username):
+    import re
+    import instaloader
+    
+    # Strategy 1: Try api/v1/users/web_profile_info/
+    print("Attempting to lookup profile ID via web_profile_info API...")
+    url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'X-IG-App-ID': '936619743392459',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.instagram.com/',
+    }
+    try:
+        r = L.context._session.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            user_data = data.get("data", {}).get("user", {})
+            if user_data and "id" in user_data:
+                user_id = int(user_data["id"])
+                print(f"Success: extracted user ID {user_id} via web_profile_info.")
+                return instaloader.Profile.from_id(L.context, user_id)
+    except Exception as e:
+        print(f"web_profile_info API lookup failed: {e}")
+        
+    # Strategy 2: Try scraping profile HTML for user ID
+    print("Attempting to lookup profile ID via HTML parsing...")
+    try:
+        page_url = f"https://www.instagram.com/{username}/"
+        page_r = L.context._session.get(page_url, headers=headers, timeout=10)
+        if page_r.status_code == 200:
+            html = page_r.text
+            
+            # Pattern 1
+            match = re.search(r'profilePage_([0-9]+)', html)
+            if match:
+                user_id = int(match.group(1))
+                print(f"Success: extracted user ID {user_id} via profilePage pattern.")
+                return instaloader.Profile.from_id(L.context, user_id)
+                
+            # Pattern 2
+            match = re.search(r'"profile_owner"\s*:\s*\{\s*"id"\s*:\s*"([0-9]+)"', html)
+            if match:
+                user_id = int(match.group(1))
+                print(f"Success: extracted user ID {user_id} via profile_owner pattern.")
+                return instaloader.Profile.from_id(L.context, user_id)
+                
+            # Pattern 3
+            scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+            for script in scripts:
+                if username in script:
+                    match = re.search(r'"id"\s*:\s*"([0-9]+)"', script)
+                    if match:
+                        user_id = int(match.group(1))
+                        print(f"Success: extracted user ID {user_id} from script tags.")
+                        return instaloader.Profile.from_id(L.context, user_id)
+    except Exception as e:
+        print(f"HTML parsing lookup failed: {e}")
+        
+    # Strategy 3: Default Instaloader search lookup
+    print("Falling back to default Instaloader search lookup...")
+    return instaloader.Profile.from_username(L.context, username)
+
 def get_insta_profile_reels(target_username, session_dir, auth_username=None):
     """
     Scrapes the 12 most recent Reels/videos from an Instagram profile.
-    Uses saved login session if available, with robust cookie fallbacks.
+    Uses saved login session if available, with robust cookie fallbacks and direct ID extraction.
     """
     import instaloader
     L = instaloader.Instaloader(user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -639,12 +703,12 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None):
                 print(f"Error loading session in profile scraper: {e}")
                 
     try:
-        profile = instaloader.Profile.from_username(L.context, target_username)
+        profile = get_instagram_profile_robust(L, target_username)
     except Exception as first_err:
         print(f"First attempt to load profile failed: {first_err}. Trying cookie fallback...")
         if load_cookies_to_instaloader(L):
             try:
-                profile = instaloader.Profile.from_username(L.context, target_username)
+                profile = get_instagram_profile_robust(L, target_username)
             except Exception as second_err:
                 raise Exception(f"Profile '{target_username}' not found or loading restricted: {second_err}")
         else:
