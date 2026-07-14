@@ -329,3 +329,158 @@ def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback
                 return base + ext
         return filename
 
+def get_shorts_by_hashtags(hashtags_str, sort_by):
+    """
+    Given a comma-separated string of hashtags, queries all of them,
+    deduplicates the shorts, and sorts them according to the user's preference.
+    """
+    import concurrent.futures
+    
+    tags = [t.strip().lstrip('#') for t in hashtags_str.split(',') if t.strip()]
+    if not tags:
+        return []
+        
+    all_shorts = {}
+    
+    def fetch_tag(tag):
+        url = f"https://www.youtube.com/hashtag/{tag}"
+        ydl_opts = {
+            'extract_flat': True,
+            'playlistend': 50,
+            'quiet': True,
+            'no_warnings': True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                entries = info.get('entries', [])
+                results = []
+                for entry in entries:
+                    video_id = entry.get('id')
+                    is_short = False
+                    entry_url = entry.get('url', '')
+                    if '/shorts/' in entry_url:
+                        is_short = True
+                    elif entry.get('duration') and entry.get('duration') <= 60:
+                        is_short = True
+                    
+                    if is_short and video_id:
+                        thumbnails = entry.get('thumbnails', [])
+                        thumb = thumbnails[-1].get('url', '') if thumbnails else f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                        
+                        results.append({
+                            'id': video_id,
+                            'title': entry.get('title') or 'YouTube Short',
+                            'views': entry.get('view_count') or 0,
+                            'duration': entry.get('duration') or 0,
+                            'uploader': entry.get('uploader') or 'Unknown',
+                            'url': f"https://www.youtube.com/shorts/{video_id}",
+                            'thumbnail': thumb
+                        })
+                return results
+        except Exception as e:
+            print(f"Error fetching hashtag #{tag}: {e}")
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_tag, tag): tag for tag in tags}
+        for future in concurrent.futures.as_completed(futures):
+            results = future.result()
+            for item in results:
+                video_id = item['id']
+                if video_id not in all_shorts or item['views'] > all_shorts[video_id]['views']:
+                    all_shorts[video_id] = item
+                    
+    shorts_list = list(all_shorts.values())
+    
+    if sort_by == "Views (High to Low)":
+        shorts_list.sort(key=lambda x: x.get('views', 0), reverse=True)
+    elif sort_by == "Views (Low to High)":
+        shorts_list.sort(key=lambda x: x.get('views', 0))
+    elif sort_by == "Title (A-Z)":
+        shorts_list.sort(key=lambda x: x.get('title', '').lower())
+    elif sort_by == "Duration (Short to Long)":
+        shorts_list.sort(key=lambda x: x.get('duration', 0))
+        
+    return shorts_list[:20]
+
+def get_youtube_video_info(video_url):
+    """
+    Fetches info for a regular YouTube video.
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        title = info.get('title') or 'YouTube Video'
+        title = title.split('\n')[0].strip()
+        if len(title) > 80:
+            title = title[:80] + "..."
+            
+        thumbnails = info.get('thumbnails', [])
+        thumb_url = info.get('thumbnail', '')
+        if not thumb_url and thumbnails:
+            thumb_url = thumbnails[-1].get('url', '')
+            
+        return {
+            'id': info.get('id'),
+            'title': title,
+            'views': info.get('view_count', 0),
+            'uploader': info.get('uploader') or 'Unknown',
+            'duration': info.get('duration', 0),
+            'thumbnail': thumb_url,
+            'url': video_url
+        }
+
+def download_youtube_video(video_url, download_dir, progress_callback=None):
+    """
+    Downloads a regular YouTube video using a progress callback.
+    """
+    if not os.path.exists(download_dir):
+        os.makedirs(download_dir)
+        
+    def ytdl_hook(d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
+            downloaded = d.get('downloaded_bytes', 0)
+            percent = (downloaded / total * 100) if total > 0 else 0
+            speed = d.get('_speed_str', 'N/A')
+            eta = d.get('_eta_str', 'N/A')
+            if progress_callback:
+                progress_callback({
+                    'status': 'downloading',
+                    'percent': percent,
+                    'speed': speed,
+                    'eta': eta
+                })
+        elif d['status'] == 'finished':
+            if progress_callback:
+                progress_callback({
+                    'status': 'finished',
+                    'percent': 100.0,
+                    'speed': '0',
+                    'eta': '0'
+                })
+
+    opts = {
+        'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'progress_hooks': [ytdl_hook],
+        'quiet': True,
+        'no_warnings': True,
+    }
+    
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(video_url, download=True)
+        filename = ydl.prepare_filename(info)
+        base, _ = os.path.splitext(filename)
+        if os.path.exists(filename):
+            return filename
+        for ext in ['.mp4', '.mkv', '.webm']:
+            if os.path.exists(base + ext):
+                return base + ext
+        return filename
+

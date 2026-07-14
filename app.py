@@ -238,6 +238,96 @@ class ReelCard(ctk.CTkFrame):
         return self.selected.get()
 
 
+class VideoCard(ctk.CTkFrame):
+    """A card displaying a YouTube Video with its thumbnail, title, views, uploader, and duration."""
+    def __init__(self, parent, video_data):
+        super().__init__(parent, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244")
+        self.video_data = video_data
+        
+        self.grid_columnconfigure(1, weight=1)
+        
+        # Thumbnail Frame (standard 16:9 ratio)
+        self.thumb_frame = ctk.CTkFrame(self, width=160, height=90, fg_color="#11111b", corner_radius=6)
+        self.thumb_frame.grid(row=0, column=0, rowspan=4, padx=12, pady=12, sticky="nw")
+        self.thumb_frame.grid_propagate(False)
+        
+        self.thumb_label = ctk.CTkLabel(self.thumb_frame, text="Loading...", text_color="#7f849c", font=ctk.CTkFont(family="Segoe UI", size=11))
+        self.thumb_label.place(relx=0.5, rely=0.5, anchor="center")
+        
+        title_text = video_data.get('title', 'YouTube Video')
+        self.title_lbl = ctk.CTkLabel(
+            self,
+            text=title_text,
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#cdd6f4",
+            anchor="w",
+            justify="left",
+            wraplength=320
+        )
+        self.title_lbl.grid(row=0, column=1, padx=(5, 12), pady=(12, 2), sticky="w")
+        
+        uploader_text = f"Channel: {video_data.get('uploader', 'Unknown')}"
+        self.uploader_lbl = ctk.CTkLabel(
+            self,
+            text=uploader_text,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#89b4fa",
+            anchor="w"
+        )
+        self.uploader_lbl.grid(row=1, column=1, padx=(5, 12), pady=2, sticky="w")
+        
+        views = video_data.get('views', 0)
+        if views >= 1_000_000:
+            views_text = f"{views / 1_000_000:.1f}M views"
+        elif views >= 1_000:
+            views_text = f"{views / 1_000:.1f}K views"
+        else:
+            views_text = f"{views} views"
+            
+        duration = video_data.get('duration', 0)
+        minutes = duration // 60
+        seconds = duration % 60
+        duration_text = f"{minutes:02d}:{seconds:02d}"
+        
+        meta_text = f"Views: {views_text}  |  Duration: {duration_text}"
+        self.meta_lbl = ctk.CTkLabel(
+            self,
+            text=meta_text,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8",
+            anchor="w"
+        )
+        self.meta_lbl.grid(row=2, column=1, padx=(5, 12), pady=2, sticky="w")
+        
+        threading.Thread(target=self.load_thumbnail, daemon=True).start()
+        
+    def load_thumbnail(self):
+        url = self.video_data.get('thumbnail')
+        if not url:
+            self.thumb_label.configure(text="No Image")
+            return
+            
+        try:
+            import urllib.request
+            from PIL import Image
+            import io
+            
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                img_data = response.read()
+                
+            img = Image.open(io.BytesIO(img_data))
+            img = img.resize((160, 90), Image.Resampling.LANCZOS)
+            
+            photo = ctk.CTkImage(light_image=img, dark_image=img, size=(160, 90))
+            
+            self.thumb_label.configure(image=photo, text="")
+            self.thumb_label.image = photo
+        except Exception as e:
+            print(f"Error loading video thumbnail: {e}")
+            self.thumb_label.configure(text="Error")
+
+
 def check_terms_accepted():
     config_dir = os.path.expanduser("~")
     config_path = os.path.join(config_dir, ".yt_shorts_downloader_accepted")
@@ -666,6 +756,10 @@ class App(ctk.CTk):
         # YouTube Downloader State Variables
         self.shorts_list = []
         self.cards = []
+        self.hash_shorts_list = []
+        self.hash_cards = []
+        self.video_data = None
+        self.video_card = None
         
         # Instagram Downloader State Variables
         self.insta_reel_data = None
@@ -813,7 +907,7 @@ class App(ctk.CTk):
         # Headers inside frame
         yt_title = ctk.CTkLabel(
             self.yt_frame,
-            text="YouTube Shorts Downloader",
+            text="YouTube Downloader Suite",
             font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
             text_color="#cba6f7"
         )
@@ -821,19 +915,39 @@ class App(ctk.CTk):
         
         yt_sub = ctk.CTkLabel(
             self.yt_frame,
-            text="Download the top-viewed Shorts from any YouTube channel",
+            text="Download standard videos, channel Shorts, or search by hashtags",
             font=ctk.CTkFont(family="Segoe UI", size=12),
             text_color="#a6adc8"
         )
-        yt_sub.pack(padx=20, pady=(0, 15))
+        yt_sub.pack(padx=20, pady=(0, 10))
         
-        # Search Frame
-        self.search_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
-        self.search_frame.pack(fill="x", padx=20, pady=10)
-        self.search_frame.grid_columnconfigure(0, weight=1)
+        # Segmented Button for tabs
+        self.yt_tab_control = ctk.CTkSegmentedButton(
+            self.yt_frame,
+            values=["Channel Shorts", "Hashtag Shorts", "Video Downloader"],
+            command=self.on_yt_tab_changed,
+            fg_color="#181825",
+            selected_color="#cba6f7",
+            selected_text_color="#11111b",
+            unselected_color="#1e1e2e",
+            unselected_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.yt_tab_control.pack(padx=20, pady=(0, 10), fill="x")
+        self.yt_tab_control.set("Channel Shorts")
+        
+        # Container frames for each tab
+        self.tab_channel_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
+        self.tab_hashtag_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
+        self.tab_video_frame = ctk.CTkFrame(self.yt_frame, fg_color="transparent")
+        
+        # --- TAB 1: CHANNEL SHORTS WIDGETS ---
+        search_frame = ctk.CTkFrame(self.tab_channel_frame, fg_color="transparent")
+        search_frame.pack(fill="x", padx=20, pady=10)
+        search_frame.grid_columnconfigure(0, weight=1)
         
         self.url_entry = ctk.CTkEntry(
-            self.search_frame,
+            search_frame,
             placeholder_text="Enter YouTube channel link (e.g. @MrBeast)...",
             height=45,
             fg_color="#1e1e2e",
@@ -847,7 +961,7 @@ class App(ctk.CTk):
         self.url_entry.bind("<Return>", lambda e: self.start_fetch())
         
         self.fetch_btn = ctk.CTkButton(
-            self.search_frame,
+            search_frame,
             text="Analyze Channel",
             height=45,
             fg_color="#89b4fa",
@@ -859,9 +973,8 @@ class App(ctk.CTk):
         )
         self.fetch_btn.grid(row=0, column=1, sticky="ns")
         
-        # Status details
         self.status_label = ctk.CTkLabel(
-            self.yt_frame, 
+            self.tab_channel_frame, 
             text="Ready to search.", 
             font=ctk.CTkFont(family="Segoe UI", size=12),
             text_color="#a6adc8"
@@ -869,7 +982,7 @@ class App(ctk.CTk):
         self.status_label.pack(padx=20, pady=(5, 5))
         
         self.fetch_progress = ctk.CTkProgressBar(
-            self.yt_frame, 
+            self.tab_channel_frame, 
             height=6, 
             fg_color="#1e1e2e", 
             progress_color="#f9e2af"
@@ -877,15 +990,14 @@ class App(ctk.CTk):
         self.fetch_progress.pack(fill="x", padx=20, pady=(0, 10))
         self.fetch_progress.set(0)
         
-        # Results View (Scrollable)
         self.scroll_frame = ctk.CTkScrollableFrame(
-            self.yt_frame, 
+            self.tab_channel_frame, 
             fg_color="#181825", 
             border_color="#313244", 
             border_width=1,
             corner_radius=10
         )
-        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
         
         self.placeholder_label = ctk.CTkLabel(
             self.scroll_frame,
@@ -894,11 +1006,164 @@ class App(ctk.CTk):
             text_color="#7f849c",
             justify="center"
         )
-        self.placeholder_label.pack(expand=True, fill="both", pady=100)
+        self.placeholder_label.pack(expand=True, fill="both", pady=80)
         
-        # Controls (Download Folder + Button)
+        # --- TAB 2: HASHTAG SHORTS WIDGETS ---
+        hash_search_frame = ctk.CTkFrame(self.tab_hashtag_frame, fg_color="transparent")
+        hash_search_frame.pack(fill="x", padx=20, pady=10)
+        hash_search_frame.grid_columnconfigure(0, weight=1)
+        
+        self.hash_entry = ctk.CTkEntry(
+            hash_search_frame,
+            placeholder_text="Enter hashtags separated by commas (e.g. funny, trending, diy)...",
+            height=45,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            placeholder_text_color="#7f849c",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13)
+        )
+        self.hash_entry.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0, 0), pady=(0, 10))
+        self.hash_entry.bind("<Return>", lambda e: self.start_hashtag_fetch())
+        
+        self.sort_option = ctk.CTkOptionMenu(
+            hash_search_frame,
+            values=["Views (High to Low)", "Views (Low to High)", "Title (A-Z)", "Duration (Short to Long)"],
+            height=35,
+            fg_color="#313244",
+            button_color="#45475a",
+            button_hover_color="#585b70",
+            text_color="#cdd6f4",
+            dropdown_fg_color="#1e1e2e",
+            dropdown_hover_color="#313244",
+            dropdown_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        )
+        self.sort_option.grid(row=1, column=0, sticky="ew", padx=(0, 10))
+        self.sort_option.set("Views (High to Low)")
+        
+        self.hash_fetch_btn = ctk.CTkButton(
+            hash_search_frame,
+            text="Search Hashtags",
+            height=35,
+            fg_color="#cba6f7",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.start_hashtag_fetch,
+            corner_radius=8
+        )
+        self.hash_fetch_btn.grid(row=1, column=1, sticky="ew")
+        
+        self.hash_status_label = ctk.CTkLabel(
+            self.tab_hashtag_frame, 
+            text="Ready to search.", 
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.hash_status_label.pack(padx=20, pady=(5, 5))
+        
+        self.hash_progress = ctk.CTkProgressBar(
+            self.tab_hashtag_frame, 
+            height=6, 
+            fg_color="#1e1e2e", 
+            progress_color="#f9e2af"
+        )
+        self.hash_progress.pack(fill="x", padx=20, pady=(0, 10))
+        self.hash_progress.set(0)
+        
+        self.hash_scroll_frame = ctk.CTkScrollableFrame(
+            self.tab_hashtag_frame, 
+            fg_color="#181825", 
+            border_color="#313244", 
+            border_width=1,
+            corner_radius=10
+        )
+        self.hash_scroll_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.hash_placeholder_label = ctk.CTkLabel(
+            self.hash_scroll_frame,
+            text="Enter hashtags above separated by commas\nand click 'Search Hashtags' to find top Shorts.",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.hash_placeholder_label.pack(expand=True, fill="both", pady=80)
+        
+        # --- TAB 3: VIDEO DOWNLOADER WIDGETS ---
+        vid_search_frame = ctk.CTkFrame(self.tab_video_frame, fg_color="transparent")
+        vid_search_frame.pack(fill="x", padx=20, pady=10)
+        vid_search_frame.grid_columnconfigure(0, weight=1)
+        
+        self.vid_url_entry = ctk.CTkEntry(
+            vid_search_frame,
+            placeholder_text="Enter standard YouTube video URL...",
+            height=45,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            placeholder_text_color="#7f849c",
+            corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13)
+        )
+        self.vid_url_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.vid_url_entry.bind("<Return>", lambda e: self.start_video_fetch())
+        
+        self.vid_fetch_btn = ctk.CTkButton(
+            vid_search_frame,
+            text="Fetch Info",
+            height=45,
+            fg_color="#89b4fa",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            command=self.start_video_fetch,
+            corner_radius=8
+        )
+        self.vid_fetch_btn.grid(row=0, column=1, sticky="ns")
+        
+        self.vid_status_label = ctk.CTkLabel(
+            self.tab_video_frame, 
+            text="Ready to search.", 
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        self.vid_status_label.pack(padx=20, pady=(5, 5))
+        
+        self.vid_progress = ctk.CTkProgressBar(
+            self.tab_video_frame, 
+            height=6, 
+            fg_color="#1e1e2e", 
+            progress_color="#f9e2af"
+        )
+        self.vid_progress.pack(fill="x", padx=20, pady=(0, 10))
+        self.vid_progress.set(0)
+        
+        self.vid_card_frame = ctk.CTkFrame(
+            self.tab_video_frame, 
+            fg_color="#181825", 
+            border_color="#313244", 
+            border_width=1,
+            corner_radius=10
+        )
+        self.vid_card_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.vid_placeholder_label = ctk.CTkLabel(
+            self.vid_card_frame,
+            text="Paste a YouTube video URL above\nand click 'Fetch Info' to load video details.",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.vid_placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+        # Pack the default frame
+        self.tab_channel_frame.pack(fill="both", expand=True)
+        
+        # --- BOTTOM CONTROLS (Common to all tabs) ---
         self.controls_frame = ctk.CTkFrame(self.yt_frame, fg_color="#1e1e2e", corner_radius=10, border_width=1, border_color="#313244")
-        self.controls_frame.pack(fill="x", padx=20, pady=(5, 10))
+        self.controls_frame.pack(fill="x", padx=20, pady=(5, 5))
         self.controls_frame.grid_columnconfigure(1, weight=1)
         
         dir_title = ctk.CTkLabel(
@@ -937,7 +1202,7 @@ class App(ctk.CTk):
         
         self.download_btn = ctk.CTkButton(
             self.controls_frame,
-            text="Download Top Shorts",
+            text="Download Selected Shorts",
             height=45,
             fg_color="#a6e3a1",
             hover_color="#94e2d5",
@@ -1483,6 +1748,256 @@ class App(ctk.CTk):
     def open_insta_login_window(self):
         # Open the top-level credentials window
         InstaLoginWindow(self)
+
+    def on_yt_tab_changed(self, value):
+        # Hide all tab frames
+        self.tab_channel_frame.pack_forget()
+        self.tab_hashtag_frame.pack_forget()
+        self.tab_video_frame.pack_forget()
+        
+        # Reset overall download progress bar
+        self.down_status_label.grid_remove()
+        self.down_progress.grid_remove()
+        self.download_btn.configure(text="Download Selected", state="disabled")
+        
+        if value == "Channel Shorts":
+            self.tab_channel_frame.pack(fill="both", expand=True)
+            self.download_btn.configure(text="Download Selected Shorts", command=self.start_download)
+            if self.cards:
+                self.download_btn.configure(state="normal")
+        elif value == "Hashtag Shorts":
+            self.tab_hashtag_frame.pack(fill="both", expand=True)
+            self.download_btn.configure(text="Download Selected Shorts", command=self.start_hashtag_download)
+            if self.hash_cards:
+                self.download_btn.configure(state="normal")
+        elif value == "Video Downloader":
+            self.tab_video_frame.pack(fill="both", expand=True)
+            self.download_btn.configure(text="Download Video", command=self.start_video_download)
+            if self.video_data:
+                self.download_btn.configure(state="normal")
+
+    def start_hashtag_fetch(self):
+        hashtags = self.hash_entry.get().strip()
+        sort_by = self.sort_option.get()
+        if not hashtags:
+            self.update_hash_status("Please enter at least one hashtag.", 0, error=True)
+            return
+            
+        if self.is_processing:
+            return
+            
+        self.is_processing = True
+        self.hash_fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        for card in self.hash_cards:
+            card.pack_forget()
+            card.destroy()
+        self.hash_cards.clear()
+        self.hash_shorts_list.clear()
+        
+        self.hash_placeholder_label.pack_forget()
+        
+        self.hash_status_label.configure(text_color="#a6adc8")
+        self.hash_progress.configure(mode="indeterminate")
+        self.hash_progress.start()
+        self.update_hash_status("Searching YouTube hashtags...", 0.1)
+        
+        threading.Thread(target=self.hashtag_fetch_thread_fn, args=(hashtags, sort_by), daemon=True).start()
+
+    def update_hash_status(self, text, progress_val, error=False):
+        self.hash_status_label.configure(text=text)
+        if error:
+            self.hash_status_label.configure(text_color="#f38ba8")
+            self.hash_progress.configure(progress_color="#f38ba8")
+            self.hash_progress.stop()
+            self.hash_progress.configure(mode="determinate")
+            self.hash_progress.set(0)
+        else:
+            self.hash_status_label.configure(text_color="#a6adc8")
+            self.hash_progress.configure(progress_color="#f9e2af")
+            
+        if self.hash_progress.cget("mode") == "determinate":
+            self.hash_progress.set(progress_val)
+            
+    def hashtag_fetch_thread_fn(self, hashtags, sort_by):
+        try:
+            shorts = downloader.get_shorts_by_hashtags(hashtags, sort_by)
+            self.after(0, lambda: self.display_hashtag_results(shorts))
+        except Exception as e:
+            self.after(0, lambda: self.handle_hash_fetch_error(f"Error fetching hashtags: {e}"))
+            
+    def handle_hash_fetch_error(self, message):
+        self.is_processing = False
+        self.hash_fetch_btn.configure(state="normal")
+        self.update_hash_status(message, 1.0, error=True)
+        self.hash_placeholder_label.configure(text=message, text_color="#f38ba8")
+        self.hash_placeholder_label.pack(expand=True, fill="both", pady=100)
+        
+    def display_hashtag_results(self, shorts):
+        self.is_processing = False
+        self.hash_fetch_btn.configure(state="normal")
+        self.hash_progress.stop()
+        self.hash_progress.configure(mode="determinate")
+        self.hash_progress.set(1.0)
+        
+        if not shorts:
+            self.update_hash_status("No shorts found for these hashtags.", 1.0, error=True)
+            self.hash_placeholder_label.configure(text="No Shorts found matching these hashtags.\nTry different tags.", text_color="#f38ba8")
+            self.hash_placeholder_label.pack(expand=True, fill="both", pady=100)
+            return
+            
+        self.hash_shorts_list = shorts
+        self.update_hash_status(f"Found {len(shorts)} aggregated shorts successfully.", 1.0)
+        
+        for idx, short in enumerate(shorts):
+            card = ShortCard(self.hash_scroll_frame, short)
+            self.hash_cards.append(card)
+            self.after(idx * 60, lambda c=card: c.pack(fill="x", padx=5, pady=5))
+            
+        self.download_btn.configure(state="normal")
+
+    def start_hashtag_download(self):
+        selected_shorts = []
+        for idx, card in enumerate(self.hash_cards):
+            if card.is_selected():
+                selected_shorts.append(self.hash_shorts_list[idx])
+                
+        if not selected_shorts:
+            self.update_status("Please select at least one Short to download.", 1.0, error=True)
+            return
+            
+        self.is_processing = True
+        self.hash_fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        self.down_status_label.grid()
+        self.down_progress.grid()
+        
+        threading.Thread(target=self.download_thread_fn, args=(selected_shorts,), daemon=True).start()
+
+    def start_video_fetch(self):
+        url = self.vid_url_entry.get().strip()
+        if not url:
+            self.update_video_status("Please enter a YouTube video URL.", 0, error=True)
+            return
+            
+        if self.is_processing:
+            return
+            
+        self.is_processing = True
+        self.vid_fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        if self.video_card:
+            self.video_card.pack_forget()
+            self.video_card.destroy()
+            self.video_card = None
+        self.video_data = None
+        
+        self.vid_placeholder_label.pack_forget()
+        
+        self.vid_status_label.configure(text_color="#a6adc8")
+        self.vid_progress.configure(mode="indeterminate")
+        self.vid_progress.start()
+        self.update_video_status("Connecting to YouTube...", 0.1)
+        
+        threading.Thread(target=self.video_fetch_thread_fn, args=(url,), daemon=True).start()
+
+    def update_video_status(self, text, progress_val, error=False):
+        self.vid_status_label.configure(text=text)
+        if error:
+            self.vid_status_label.configure(text_color="#f38ba8")
+            self.vid_progress.configure(progress_color="#f38ba8")
+            self.vid_progress.stop()
+            self.vid_progress.configure(mode="determinate")
+            self.vid_progress.set(0)
+        else:
+            self.vid_status_label.configure(text_color="#a6adc8")
+            self.vid_progress.configure(progress_color="#f9e2af")
+            
+        if self.vid_progress.cget("mode") == "determinate":
+            self.vid_progress.set(progress_val)
+
+    def video_fetch_thread_fn(self, url):
+        try:
+            info = downloader.get_youtube_video_info(url)
+            self.after(0, lambda: self.display_video_results(info))
+        except Exception as e:
+            self.after(0, lambda: self.handle_video_fetch_error(f"Error fetching video info: {e}"))
+            
+    def handle_video_fetch_error(self, message):
+        self.is_processing = False
+        self.vid_fetch_btn.configure(state="normal")
+        self.update_video_status(message, 1.0, error=True)
+        self.vid_placeholder_label.configure(text=message, text_color="#f38ba8")
+        self.vid_placeholder_label.pack(expand=True, fill="both", pady=100)
+
+    def display_video_results(self, info):
+        self.is_processing = False
+        self.vid_fetch_btn.configure(state="normal")
+        self.vid_progress.stop()
+        self.vid_progress.configure(mode="determinate")
+        self.vid_progress.set(1.0)
+        
+        self.video_data = info
+        self.update_video_status("Video loaded successfully.", 1.0)
+        
+        self.video_card = VideoCard(self.vid_card_frame, info)
+        self.video_card.pack(fill="x", padx=15, pady=15)
+        
+        self.download_btn.configure(state="normal")
+
+    def start_video_download(self):
+        if not self.video_data:
+            return
+            
+        self.is_processing = True
+        self.vid_fetch_btn.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        
+        self.down_status_label.grid()
+        self.down_progress.grid()
+        
+        url = self.video_data['url']
+        threading.Thread(target=self.video_download_thread_fn, args=(url,), daemon=True).start()
+
+    def video_download_thread_fn(self, url):
+        download_folder = self.download_dir.get()
+        title = self.video_data['title']
+        
+        def progress_cb(state_dict):
+            self.after(0, lambda t=title, sd=state_dict: self.update_video_download_progress(t, sd))
+            
+        success = False
+        try:
+            downloader.download_youtube_video(url, download_folder, progress_callback=progress_cb)
+            success = True
+        except Exception as e:
+            print(f"Error downloading video: {e}")
+            
+        self.after(0, lambda s=success: self.finish_video_download(s))
+
+    def update_video_download_progress(self, title, state_dict):
+        percent = state_dict.get('percent', 0.0)
+        speed = state_dict.get('speed', 'N/A')
+        eta = state_dict.get('eta', 'N/A')
+        
+        status_text = f"Downloading Video: \"{title[:30]}...\"\nProgress: {percent:.1f}% | Speed: {speed} | ETA: {eta}"
+        self.down_status_label.configure(text=status_text)
+        self.down_progress.set(percent / 100.0)
+
+    def finish_video_download(self, success):
+        self.is_processing = False
+        self.vid_fetch_btn.configure(state="normal")
+        self.download_btn.configure(state="normal")
+        
+        if success:
+            self.down_status_label.configure(text="Download finished successfully!", text_color="#a6e3a1")
+            self.down_progress.set(1.0)
+        else:
+            self.down_status_label.configure(text="Download failed. Check URL or connection.", text_color="#f38ba8")
+            self.down_progress.set(0)
 
 if __name__ == "__main__":
     import traceback
