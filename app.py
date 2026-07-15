@@ -618,7 +618,7 @@ class InstaLoginWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Instagram Login Settings")
-        self.geometry("450x380")
+        self.geometry("450x430")
         self.resizable(False, False)
         self.configure(fg_color="#11111b")
         self.transient(parent)
@@ -720,6 +720,20 @@ class InstaLoginWindow(ctk.CTkToplevel):
             corner_radius=6
         )
         self.clear_btn.pack(side="left", padx=10)
+        
+        self.browser_btn = ctk.CTkButton(
+            self,
+            text="Login via Browser Window",
+            width=260,
+            height=35,
+            fg_color="#cdd6f4",
+            hover_color="#a6adc8",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.login_via_browser,
+            corner_radius=6
+        )
+        self.browser_btn.pack(pady=(5, 15))
         
         # Load existing details if any
         self.load_creds()
@@ -863,6 +877,99 @@ class InstaLoginWindow(ctk.CTkToplevel):
         self.user_entry.delete(0, "end")
         self.pass_entry.delete(0, "end")
         self.status_lbl.configure(text="Cleared credentials.", text_color="#f9e2af")
+        
+    def login_via_browser(self):
+        user = self.user_entry.get().strip()
+        if not user:
+            self.status_lbl.configure(text="Please enter your Instagram username first.", text_color="#f38ba8")
+            return
+            
+        self.browser_btn.configure(state="disabled")
+        self.save_btn.configure(state="disabled")
+        self.clear_btn.configure(state="disabled")
+        self.status_lbl.configure(text="Opening browser login window...", text_color="#f9e2af")
+        self.update()
+        
+        threading.Thread(target=self.browser_login_worker, args=(user,), daemon=True).start()
+        
+    def browser_login_worker(self, username):
+        try:
+            import subprocess
+            import sys
+            import json
+            import os
+            import requests
+            import downloader
+            import crypto_utils
+            
+            temp_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta_temp_cookies.json")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            
+            # Find webview_login_helper.py path
+            app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+            helper_path = os.path.join(app_dir, "webview_login_helper.py")
+            
+            # Run helper script in a separate process to avoid thread conflicts
+            # Use subprocess to run the helper cleanly on its own main thread
+            result = subprocess.run([sys.executable, helper_path], capture_output=True, text=True)
+            
+            if os.path.exists(temp_path):
+                self.after(0, lambda: self.status_lbl.configure(text="Verifying session...", text_color="#f9e2af"))
+                
+                with open(temp_path, "r", encoding="utf-8") as f:
+                    cookies_dict = json.load(f)
+                
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                session = requests.Session()
+                session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                })
+                for name, info in cookies_dict.items():
+                    session.cookies.set(name, info["value"], domain=info["domain"], path=info["path"])
+                
+                if downloader.verify_instagram_session(session):
+                    # Save web session JSON
+                    session_dir = os.path.join(
+                        os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
+                        "Instaloader"
+                    )
+                    downloader.save_instagram_session(session, username, session_dir)
+                    
+                    # Save credentials with dummy password
+                    enc_str = crypto_utils.encrypt_credentials(username, "browser_session")
+                    config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        f.write(enc_str)
+                        
+                    self.after(0, lambda: self.browser_login_success())
+                else:
+                    self.after(0, lambda: self.browser_login_failed("Verification failed. Session is invalid."))
+            else:
+                self.after(0, lambda: self.browser_login_failed("Login cancelled or failed."))
+        except Exception as e:
+            self.after(0, lambda err=e: self.browser_login_failed(f"Error: {err}"))
+            
+    def browser_login_success(self):
+        self.browser_btn.configure(state="normal")
+        self.save_btn.configure(state="normal")
+        self.clear_btn.configure(state="normal")
+        self.status_lbl.configure(text="Connected via browser successfully!", text_color="#a6e3a1")
+        
+    def browser_login_failed(self, msg):
+        self.browser_btn.configure(state="normal")
+        self.save_btn.configure(state="normal")
+        self.clear_btn.configure(state="normal")
+        if len(msg) > 50:
+            msg = msg[:47] + "..."
+        self.status_lbl.configure(text=msg, text_color="#f38ba8")
 
 class App(ctk.CTk):
     def __init__(self):
@@ -2601,6 +2708,52 @@ class App(ctk.CTk):
 if __name__ == "__main__":
     import traceback
     
+    # Check for webview-login argument (used to bypass GUI thread conflicts)
+    if "--webview-login" in sys.argv:
+        try:
+            import webview
+            import time
+            import json
+            
+            def check_cookies(window):
+                while True:
+                    try:
+                        cookies = window.get_cookies()
+                        sessionid = None
+                        cookies_dict = {}
+                        for c in cookies:
+                            if "instagram.com" in c.domain:
+                                cookies_dict[c.name] = {
+                                    "value": c.value,
+                                    "domain": c.domain,
+                                    "path": c.path,
+                                }
+                                if c.name == 'sessionid':
+                                    sessionid = c.value
+                        
+                        if sessionid:
+                            temp_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta_temp_cookies.json")
+                            with open(temp_path, "w", encoding="utf-8") as f:
+                                json.dump(cookies_dict, f)
+                            print("SUCCESS")
+                            window.destroy()
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(1.0)
+
+            window = webview.create_window(
+                'Instagram Secure Login',
+                'https://www.instagram.com/accounts/login/',
+                width=500,
+                height=650,
+                resizable=True
+            )
+            webview.start(check_cookies, window)
+        except Exception as err:
+            print(f"Webview error: {err}")
+        sys.exit(0)
+        
     # Determine the directory of the executable or script
     if getattr(sys, 'frozen', False):
         log_dir = os.path.dirname(sys.executable)
