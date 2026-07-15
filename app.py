@@ -1126,18 +1126,23 @@ class App(ctk.CTk):
     def show_dashboard(self):
         self.yt_frame.pack_forget()
         self.insta_frame.pack_forget()
+        self.scheduler_frame.pack_forget()
         self.dashboard_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.attributes("-alpha", 0.5)
         self.fade_in(0.5)
         
     def show_youtube_downloader(self):
         self.dashboard_frame.pack_forget()
+        self.insta_frame.pack_forget()
+        self.scheduler_frame.pack_forget()
         self.yt_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.attributes("-alpha", 0.5)
         self.fade_in(0.5)
         
     def show_instagram_downloader(self):
         self.dashboard_frame.pack_forget()
+        self.yt_frame.pack_forget()
+        self.scheduler_frame.pack_forget()
         self.insta_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.attributes("-alpha", 0.5)
         self.fade_in(0.5)
@@ -3333,26 +3338,25 @@ class App(ctk.CTk):
     def toggle_clipboard_monitor(self):
         if self.monitor_clipboard.get():
             self.last_clipboard_text = ""
-            threading.Thread(target=self.clipboard_monitor_thread, daemon=True).start()
+            self.clipboard_monitor_tick()
 
-    def clipboard_monitor_thread(self):
-        import time
-        while self.monitor_clipboard.get():
-            try:
-                text = self.clipboard_get().strip()
-                if text and text != self.last_clipboard_text:
-                    self.last_clipboard_text = text
-                    # Simple validation
-                    is_yt = "youtube.com" in text or "youtu.be" in text
-                    is_insta = "instagram.com" in text
-                    
-                    if is_yt:
-                        self.after(0, lambda url=text: self.handle_clipboard_link(url, "youtube"))
-                    elif is_insta:
-                        self.after(0, lambda url=text: self.handle_clipboard_link(url, "instagram"))
-            except Exception:
-                pass
-            time.sleep(1.5)
+    def clipboard_monitor_tick(self):
+        if not self.monitor_clipboard.get():
+            return
+        try:
+            text = self.clipboard_get().strip()
+            if text and text != self.last_clipboard_text:
+                self.last_clipboard_text = text
+                is_yt = "youtube.com" in text or "youtu.be" in text
+                is_insta = "instagram.com" in text
+                
+                if is_yt:
+                    self.handle_clipboard_link(text, "youtube")
+                elif is_insta:
+                    self.handle_clipboard_link(text, "instagram")
+        except Exception:
+            pass
+        self.after(1500, self.clipboard_monitor_tick)
 
     def handle_clipboard_link(self, url, platform):
         if platform == "youtube":

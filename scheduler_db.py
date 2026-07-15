@@ -1,25 +1,29 @@
 import os
 import json
 import uuid
+import threading
 from datetime import datetime
 
 SCHEDULER_FILE = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_scheduler.json")
+db_lock = threading.Lock()
 
 def load_schedule():
-    if os.path.exists(SCHEDULER_FILE):
-        try:
-            with open(SCHEDULER_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    with db_lock:
+        if os.path.exists(SCHEDULER_FILE):
+            try:
+                with open(SCHEDULER_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return []
 
 def save_schedule(tasks):
-    try:
-        with open(SCHEDULER_FILE, "w", encoding="utf-8") as f:
-            json.dump(tasks, f, indent=2)
-    except Exception as e:
-        print(f"Error saving schedule: {e}")
+    with db_lock:
+        try:
+            with open(SCHEDULER_FILE, "w", encoding="utf-8") as f:
+                json.dump(tasks, f, indent=2)
+        except Exception as e:
+            print(f"Error saving schedule: {e}")
 
 def add_task(video_path, platform, caption, scheduled_time_str, uniquifier_opts, publish_at=None):
     """

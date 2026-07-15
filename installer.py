@@ -352,9 +352,11 @@ class Installer(ctk.CTk):
                     self.after(0, lambda val=pct, f=file: self.update_progress(val, f"Extracting: {os.path.basename(f)}"))
             
             # 3. Create shortcuts
+            app_folder_name = "YT Downloader by Panes & Pixels"
             exe_name = "YT Downloader by Panes & Pixels.exe"
-            installed_exe_path = os.path.join(target_dir, exe_name)
-            installed_icon_path = os.path.join(target_dir, "icon.ico")
+            # ZIP extracts into a subfolder matching app_folder_name
+            installed_exe_path = os.path.join(target_dir, app_folder_name, exe_name)
+            installed_icon_path = os.path.join(target_dir, app_folder_name, "icon.ico")
             
             # If icon was extracted from the ZIP, use it; otherwise fallback
             if not os.path.exists(installed_icon_path):
@@ -410,8 +412,9 @@ class Installer(ctk.CTk):
             
             # Write values
             winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "YT Downloader by Panes & Pixels")
-            # Point uninstall string to the uninstall.exe inside target folder
-            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{os.path.join(install_dir, "uninstall.exe")}"')
+            # Point uninstall string to the uninstall.exe inside app subfolder
+            app_subfolder = os.path.join(install_dir, "YT Downloader by Panes & Pixels")
+            winreg.SetValueEx(key, "UninstallString", 0, winreg.REG_SZ, f'"{os.path.join(app_subfolder, "uninstall.exe")}"')
             winreg.SetValueEx(key, "DisplayIcon", 0, winreg.REG_SZ, f'"{exe_path}"')
             winreg.SetValueEx(key, "Publisher", 0, winreg.REG_SZ, "Panes & Pixels")
             winreg.SetValueEx(key, "DisplayVersion", 0, winreg.REG_SZ, "1.0.0")
@@ -493,10 +496,11 @@ class Installer(ctk.CTk):
 
     def finish_installer(self):
         if self.zip_extracted_success and self.launch_var.get():
-            target_exe = os.path.join(self.install_dir.get(), "YT Downloader by Panes & Pixels.exe")
+            app_folder = os.path.join(self.install_dir.get(), "YT Downloader by Panes & Pixels")
+            target_exe = os.path.join(app_folder, "YT Downloader by Panes & Pixels.exe")
             if os.path.exists(target_exe):
                 try:
-                    subprocess.Popen([target_exe], cwd=self.install_dir.get())
+                    subprocess.Popen([target_exe], cwd=app_folder)
                 except Exception as e:
                     print(f"Error launching installed app: {e}")
         self.destroy()

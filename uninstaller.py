@@ -138,13 +138,19 @@ class Uninstaller(ctk.CTk):
             
         # 3. Create self-deleting batch script in %TEMP%
         install_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        parent_dir = os.path.dirname(install_dir)
+        # Determine the root folder to delete (either install_dir or parent_dir if it's the root installation folder)
+        target_to_delete = install_dir
+        if os.path.basename(parent_dir).lower() == "yt downloader by panes & pixels":
+            target_to_delete = parent_dir
+            
         temp_dir = os.environ.get("TEMP", os.path.expanduser("~"))
         bat_path = os.path.join(temp_dir, "yt_downloader_cleanup.bat")
         
         bat_content = f"""@echo off
 chcp 65001 > nul
 timeout /t 2 /nobreak > NUL
-rmdir /s /q "{install_dir}"
+rmdir /s /q "{target_to_delete}"
 del "%~f0"
 """
         try:
