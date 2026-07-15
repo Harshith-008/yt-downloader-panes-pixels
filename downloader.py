@@ -26,10 +26,50 @@ def clean_channel_url(url):
             
     return url
 
+import json
+
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_history.json")
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"youtube": {}, "instagram": {}}
+
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"Error saving download history: {e}")
+
+def add_to_history(platform, page_id, video_id):
+    history = load_history()
+    if platform not in history:
+        history[platform] = {}
+    
+    # Normalize page_id
+    page_id = page_id.lower().strip()
+    if page_id not in history[platform]:
+        history[platform][page_id] = []
+        
+    if video_id not in history[platform][page_id]:
+        history[platform][page_id].append(video_id)
+        save_history(history)
+
+def is_downloaded(platform, page_id, video_id):
+    history = load_history()
+    page_id = page_id.lower().strip()
+    return video_id in history.get(platform, {}).get(page_id, [])
+
 def get_top_shorts(channel_url, progress_callback=None, limit=100):
     """
     Scrapes the channel's shorts page, fetches up to `limit` entries,
-    sorts them by view count, and returns the top 10.
+    filters out already downloaded ones, sorts them by view count,
+    and returns the top 10.
     """
     clean_url = clean_channel_url(channel_url)
     if progress_callback:
@@ -42,6 +82,15 @@ def get_top_shorts(channel_url, progress_callback=None, limit=100):
         'no_warnings': True,
     }
     
+    # Extract channel identifier for history lookup
+    # e.g., https://www.youtube.com/@handle/shorts -> @handle
+    parts = clean_url.split('/')
+    page_id = (parts[-2] if len(parts) >= 2 else channel_url).lower().strip()
+    
+    # Load downloaded history for this channel
+    history = load_history()
+    downloaded_ids = history.get("youtube", {}).get(page_id, [])
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         if progress_callback:
             progress_callback("Fetching shorts list...", 0.4)
@@ -51,27 +100,27 @@ def get_top_shorts(channel_url, progress_callback=None, limit=100):
         if progress_callback:
             progress_callback(f"Found {len(entries)} shorts. Sorting...", 0.8)
             
-        # Filter entries and get view count safely
         valid_shorts = []
         for entry in entries:
             if not entry:
                 continue
-            # Ensure it is a short video (URL usually contains /shorts/)
             url = entry.get('url') or ''
             if '/shorts/' in url or entry.get('id'):
+                video_id = entry.get('id') or url.split('/')[-1]
+                
+                # Exclude already downloaded shorts
+                if video_id in downloaded_ids:
+                    continue
+                    
                 title = entry.get('title', 'Untitled Short')
                 views = entry.get('view_count')
-                # If view_count is missing, default to 0
                 views_int = int(views) if views is not None else 0
                 
-                # Get best thumbnail URL
                 thumbnails = entry.get('thumbnails', [])
                 thumb_url = ""
                 if thumbnails:
-                    # Try to get the last thumbnail (usually highest res)
                     thumb_url = thumbnails[-1].get('url', '')
                 
-                video_id = entry.get('id') or url.split('/')[-1]
                 short_url = f"https://www.youtube.com/shorts/{video_id}"
                 
                 valid_shorts.append({
@@ -1042,9 +1091,18 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None, au
     if session:
         try:
             user_id, user_info = get_instagram_user_id(session, target_username)
-            reels = get_user_reels_via_api(session, user_id, target_username)
+            reels = get_user_reels_via_api(session, user_id, target_username, max_count=50)
             if reels:
-                return reels
+                # Filter out downloaded reels
+                history = load_history()
+                downloaded_ids = history.get("instagram", {}).get(target_username.lower().strip(), [])
+                filtered_reels = [r for r in reels if r['id'] not in downloaded_ids]
+                
+                # Sort by views descending
+                filtered_reels.sort(key=lambda x: x['views'], reverse=True)
+                
+                # Return top 10
+                return filtered_reels[:10]
             else:
                 print("[Reels] Direct API returned no reels, trying instaloader fallback...")
         except SessionExpiredError:
@@ -1119,9 +1177,15 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None, au
                     'url': f"https://www.instagram.com/reel/{post.shortcode}/"
                 })
                 count += 1
-                if count >= 12:
+                if count >= 50:
                     break
-        return reels_list
+                    
+        # Filter and sort fallback reels
+        history = load_history()
+        downloaded_ids = history.get("instagram", {}).get(target_username.lower().strip(), [])
+        filtered_reels = [r for r in reels_list if r['id'] not in downloaded_ids]
+        filtered_reels.sort(key=lambda x: x['views'], reverse=True)
+        return filtered_reels[:10]
     except SessionExpiredError:
         raise
     except Exception as e:

@@ -1952,8 +1952,17 @@ class App(ctk.CTk):
             self.update_status("Please select at least one Short to download.", 1.0, error=True)
             return
             
+        raw_channel_url = self.url_entry.get().strip()
+        try:
+            import downloader
+            clean_url = downloader.clean_channel_url(raw_channel_url)
+            parts = clean_url.split('/')
+            page_id = parts[-2] if len(parts) >= 2 else raw_channel_url
+        except Exception:
+            page_id = raw_channel_url
+            
         for short in selected_shorts:
-            self.add_to_download_queue(short['title'], short['url'], "youtube", "short")
+            self.add_to_download_queue(short['title'], short['url'], "youtube", "short", page_id=page_id)
             
         self.update_status(f"Added {len(selected_shorts)} Shorts to download queue.", 1.0)
         
@@ -2543,8 +2552,10 @@ class App(ctk.CTk):
             self.update_insta_profile_status("Please select at least one Reel to download.", 1.0, error=True)
             return
             
+        page_id = self.insta_profile_entry.get().strip()
+        
         for reel in selected_reels:
-            self.add_to_download_queue(reel['title'], reel['url'], "instagram", "reel")
+            self.add_to_download_queue(reel['title'], reel['url'], "instagram", "reel", page_id=page_id)
             
         self.update_insta_profile_status(f"Added {len(selected_reels)} Reels to download queue.", 1.0)
 
@@ -2598,7 +2609,7 @@ class App(ctk.CTk):
         if self.queue_frame.winfo_manager():
             self.queue_frame.pack_forget()
 
-    def add_to_download_queue(self, title, url, platform, download_type):
+    def add_to_download_queue(self, title, url, platform, download_type, page_id=None):
         self.task_counter += 1
         task_id = f"task_{self.task_counter}"
         
@@ -2632,9 +2643,9 @@ class App(ctk.CTk):
         dest_dir = self.download_dir.get()
         format_preset = self.format_option.get() if platform == "instagram" else self.yt_format_option.get()
         
-        self.executor.submit(self.queue_download_worker, task_id, title, url, platform, download_type, format_preset, dest_dir)
+        self.executor.submit(self.queue_download_worker, task_id, title, url, platform, download_type, format_preset, dest_dir, page_id)
 
-    def queue_download_worker(self, task_id, title, url, platform, download_type, format_preset, dest_dir):
+    def queue_download_worker(self, task_id, title, url, platform, download_type, format_preset, dest_dir, page_id=None):
         def progress_cb(d):
             if d['status'] == 'downloading':
                 percent = d.get('percent', 0.0)
@@ -2663,6 +2674,20 @@ class App(ctk.CTk):
                         pass
                 downloader.download_insta_reel(url, dest_dir, ydl_opts=ydl_opts, progress_callback=progress_cb, format_preset=format_preset)
             success = True
+            
+            # Record in download history
+            if success and page_id:
+                try:
+                    if platform == "youtube":
+                        video_id = url.split('/')[-1]
+                    elif platform == "instagram":
+                        # url matches format like: https://www.instagram.com/reel/{code}/
+                        parts = url.strip('/').split('/')
+                        video_id = parts[-1]
+                    downloader.add_to_history(platform, page_id, video_id)
+                except Exception as ex:
+                    print(f"Error logging download to history: {ex}")
+                    
         except Exception as e:
             print(f"Queue download error: {e}")
             
