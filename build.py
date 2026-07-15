@@ -23,7 +23,7 @@ def run_build():
         '--onedir',
         '--noconsole',
         '--icon=icon.ico',
-        f'--add-data=dist{os.pathsep}dist',
+        f'--add-data=dist_web{os.pathsep}dist_web',
         f'--add-data=icon.ico{os.pathsep}.',
         '--clean',
     ]

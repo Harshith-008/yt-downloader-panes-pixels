@@ -36,7 +36,7 @@ def main():
     is_frozen = getattr(sys, 'frozen', False)
     if is_frozen:
         # Loaded by PyInstaller bundle - point to local index.html
-        url = resource_path(os.path.join("dist", "index.html"))
+        url = resource_path(os.path.join("dist_web", "index.html"))
         if not os.path.exists(url):
             # Fallback path check
             url = resource_path("index.html")
