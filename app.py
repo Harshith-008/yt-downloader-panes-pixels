@@ -1092,10 +1092,11 @@ class App(ctk.CTk):
             self.after(16, lambda: self.fade_in(alpha))
             
     def build_ui(self):
-        # We create 3 separate containers for different screens
+        # We create 4 separate containers for different screens
         self.dashboard_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.yt_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.insta_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.scheduler_frame = ctk.CTkFrame(self, fg_color="transparent")
         
         # Build queue frame (hidden by default)
         self.queue_frame = ctk.CTkFrame(self, fg_color="#181825", border_width=1, border_color="#313244", height=130, corner_radius=12)
@@ -1114,6 +1115,10 @@ class App(ctk.CTk):
         self.setup_dashboard()
         self.setup_youtube_ui()
         self.setup_instagram_ui()
+        self.setup_scheduler_ui()
+        
+        # Start background scheduler loop
+        self.start_scheduler_loop()
         
         # Start at dashboard
         self.show_dashboard()
@@ -1200,6 +1205,22 @@ class App(ctk.CTk):
             command=self.show_instagram_downloader
         )
         self.insta_card.grid(row=0, column=1, padx=(15, 0), sticky="ew")
+        
+        # Scheduler Card Button
+        self.scheduler_card = ctk.CTkButton(
+            grid_frame,
+            text="📅 Scheduler & Publisher\n\nSchedule and auto-publish content",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            fg_color="#1e1e2e",
+            hover_color="#cba6f7", # Purple highlight
+            text_color="#cdd6f4",
+            height=100,
+            corner_radius=12,
+            border_width=1,
+            border_color="#313244",
+            command=self.show_scheduler
+        )
+        self.scheduler_card.grid(row=1, column=0, columnspan=2, pady=(20, 0), sticky="ew")
         
         # Clipboard switch
         self.monitor_clipboard = tk.BooleanVar(value=False)
@@ -1936,6 +1957,647 @@ class App(ctk.CTk):
             text_color="#585b70"
         )
         copyright_lbl.pack(side="bottom", pady=(5, 10))
+
+    def show_scheduler(self):
+        self.dashboard_frame.pack_forget()
+        self.yt_frame.pack_forget()
+        self.insta_frame.pack_forget()
+        self.scheduler_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        self.attributes("-alpha", 0.5)
+        self.fade_in(0.5)
+        self.refresh_scheduler_queue()
+
+    def setup_scheduler_ui(self):
+        # Header navigation row
+        nav_frame = ctk.CTkFrame(self.scheduler_frame, fg_color="transparent")
+        nav_frame.pack(fill="x", padx=20, pady=(15, 5))
+        
+        back_btn = ctk.CTkButton(
+            nav_frame,
+            text="← Dashboard",
+            width=100,
+            height=32,
+            fg_color="#313244",
+            hover_color="#45475a",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self.show_dashboard,
+            corner_radius=6
+        )
+        back_btn.pack(side="left")
+        
+        # Headers inside frame
+        title = ctk.CTkLabel(
+            self.scheduler_frame,
+            text="📅 Scheduler & Publisher Suite",
+            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            text_color="#cba6f7"
+        )
+        title.pack(padx=20, pady=(10, 2))
+        
+        sub = ctk.CTkLabel(
+            self.scheduler_frame,
+            text="Schedule and automate publishing to YouTube and Instagram",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#a6adc8"
+        )
+        sub.pack(padx=20, pady=(0, 10))
+        
+        # Main split container (glassmorphic layout)
+        main_split = ctk.CTkFrame(self.scheduler_frame, fg_color="transparent")
+        main_split.pack(fill="both", expand=True, padx=20, pady=5)
+        main_split.grid_columnconfigure(0, weight=1, uniform="group1")
+        main_split.grid_columnconfigure(1, weight=1, uniform="group1")
+        main_split.grid_rowconfigure(0, weight=1)
+        
+        # --- LEFT PANEL: Post Creator Form ---
+        form_card = ctk.CTkFrame(
+            main_split,
+            fg_color="#181825",
+            border_color="#313244",
+            border_width=1,
+            corner_radius=12
+        )
+        form_card.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="nsew")
+        
+        form_title = ctk.CTkLabel(
+            form_card,
+            text="Schedule a Post",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#cdd6f4"
+        )
+        form_title.pack(anchor="w", padx=15, pady=(15, 10))
+        
+        # 1. Video Selector
+        self.scheduler_selected_file = None
+        sel_btn = ctk.CTkButton(
+            form_card,
+            text="📁 Select Video File...",
+            fg_color="#313244",
+            hover_color="#45475a",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.select_scheduler_video,
+            height=32,
+            corner_radius=6
+        )
+        sel_btn.pack(fill="x", padx=15, pady=5)
+        
+        self.file_path_lbl = ctk.CTkLabel(
+            form_card,
+            text="No file selected",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#7f849c"
+        )
+        self.file_path_lbl.pack(anchor="w", padx=20, pady=(2, 8))
+        
+        # 2. Platform Selector
+        plat_lbl = ctk.CTkLabel(
+            form_card,
+            text="Target Platform:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a6adc8"
+        )
+        plat_lbl.pack(anchor="w", padx=15, pady=(5, 2))
+        
+        self.scheduler_platform = ctk.CTkOptionMenu(
+            form_card,
+            values=["Instagram Reels", "YouTube Shorts"],
+            fg_color="#313244",
+            button_color="#45475a",
+            button_hover_color="#585b70",
+            text_color="#cdd6f4",
+            dropdown_fg_color="#1e1e2e",
+            dropdown_hover_color="#313244",
+            dropdown_text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold")
+        )
+        self.scheduler_platform.pack(fill="x", padx=15, pady=5)
+        self.scheduler_platform.set("Instagram Reels")
+        
+        # 3. Caption / Description
+        desc_lbl = ctk.CTkLabel(
+            form_card,
+            text="Caption / Description:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a6adc8"
+        )
+        desc_lbl.pack(anchor="w", padx=15, pady=(5, 2))
+        
+        self.scheduler_caption = ctk.CTkTextbox(
+            form_card,
+            height=60,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            border_width=1,
+            text_color="#cdd6f4",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=11)
+        )
+        self.scheduler_caption.pack(fill="x", padx=15, pady=5)
+        
+        # 4. Visual Time-Picker
+        time_lbl = ctk.CTkLabel(
+            form_card,
+            text="Scheduled Time:",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a6adc8"
+        )
+        time_lbl.pack(anchor="w", padx=15, pady=(5, 2))
+        
+        time_frame = ctk.CTkFrame(form_card, fg_color="transparent")
+        time_frame.pack(fill="x", padx=15, pady=2)
+        
+        # Date entry (Prefilled with today)
+        import datetime
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        self.scheduler_date_entry = ctk.CTkEntry(
+            time_frame,
+            width=90,
+            height=28,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6
+        )
+        self.scheduler_date_entry.pack(side="left", padx=(0, 5))
+        self.scheduler_date_entry.insert(0, today_str)
+        
+        # Hours Dropdown
+        self.scheduler_hour = ctk.CTkOptionMenu(
+            time_frame,
+            values=[f"{i:02d}" for i in range(1, 13)],
+            width=55,
+            height=28,
+            fg_color="#313244",
+            button_color="#45475a",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6
+        )
+        self.scheduler_hour.pack(side="left", padx=2)
+        current_hour = datetime.datetime.now().strftime("%I")
+        self.scheduler_hour.set(current_hour)
+        
+        colon_lbl = ctk.CTkLabel(time_frame, text=":", text_color="#cdd6f4", font=ctk.CTkFont(size=12, weight="bold"))
+        colon_lbl.pack(side="left", padx=1)
+        
+        # Minutes Dropdown
+        self.scheduler_minute = ctk.CTkOptionMenu(
+            time_frame,
+            values=[f"{i:02d}" for i in range(0, 60, 5)],
+            width=55,
+            height=28,
+            fg_color="#313244",
+            button_color="#45475a",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6
+        )
+        self.scheduler_minute.pack(side="left", padx=2)
+        self.scheduler_minute.set("00")
+        
+        # AM/PM Dropdown
+        self.scheduler_ampm = ctk.CTkOptionMenu(
+            time_frame,
+            values=["AM", "PM"],
+            width=55,
+            height=28,
+            fg_color="#313244",
+            button_color="#45475a",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            corner_radius=6
+        )
+        self.scheduler_ampm.pack(side="left", padx=(5, 0))
+        current_ampm = datetime.datetime.now().strftime("%p")
+        self.scheduler_ampm.set(current_ampm)
+        
+        # 5. Uniquifier Options
+        unq_lbl = ctk.CTkLabel(
+            form_card,
+            text="Uniquifier Options (Anti-Duplication):",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a6adc8"
+        )
+        unq_lbl.pack(anchor="w", padx=15, pady=(10, 2))
+        
+        unq_grid = ctk.CTkFrame(form_card, fg_color="transparent")
+        unq_grid.pack(fill="x", padx=15, pady=2)
+        
+        self.unq_mirror = ctk.CTkCheckBox(
+            unq_grid,
+            text="Mirror horizontally",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.unq_mirror.pack(anchor="w", pady=2)
+        
+        self.unq_speed = ctk.CTkCheckBox(
+            unq_grid,
+            text="Micro-speed alteration (101%)",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.unq_speed.pack(anchor="w", pady=2)
+        
+        self.unq_contrast = ctk.CTkCheckBox(
+            unq_grid,
+            text="Contrast shift (±1%)",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.unq_contrast.pack(anchor="w", pady=2)
+        
+        self.unq_scrub = ctk.CTkCheckBox(
+            unq_grid,
+            text="Scrub original metadata",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.unq_scrub.pack(anchor="w", pady=2)
+        self.unq_scrub.select()
+        
+        # 6. Schedule Button
+        schedule_btn = ctk.CTkButton(
+            form_card,
+            text="Schedule Post 📅",
+            height=36,
+            fg_color="#cba6f7",
+            hover_color="#b4befe",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.add_scheduled_post,
+            corner_radius=6
+        )
+        schedule_btn.pack(fill="x", padx=15, pady=(15, 15))
+        
+        # --- RIGHT PANEL: Queue ---
+        queue_card = ctk.CTkFrame(
+            main_split,
+            fg_color="#181825",
+            border_color="#313244",
+            border_width=1,
+            corner_radius=12
+        )
+        queue_card.grid(row=0, column=1, padx=(10, 0), pady=5, sticky="nsew")
+        
+        queue_title = ctk.CTkLabel(
+            queue_card,
+            text="Scheduled Queue",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#cdd6f4"
+        )
+        queue_title.pack(anchor="w", padx=15, pady=(15, 5))
+        
+        self.scheduler_scroll = ctk.CTkScrollableFrame(
+            queue_card,
+            fg_color="transparent"
+        )
+        self.scheduler_scroll.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        self.scheduler_placeholder = ctk.CTkLabel(
+            self.scheduler_scroll,
+            text="No scheduled posts yet.\nFill the form on the left to schedule a video.",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#7f849c",
+            justify="center"
+        )
+        self.scheduler_placeholder.pack(pady=100)
+        
+        # --- BOTTOM LOGS CONSOLE ---
+        log_frame = ctk.CTkFrame(
+            self.scheduler_frame,
+            fg_color="#181825",
+            border_color="#313244",
+            border_width=1,
+            corner_radius=10,
+            height=100
+        )
+        log_frame.pack(fill="x", padx=20, pady=(5, 10))
+        
+        log_title = ctk.CTkLabel(
+            log_frame,
+            text="Activity Logs Console",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#cba6f7"
+        )
+        log_title.pack(anchor="w", padx=12, pady=(5, 1))
+        
+        self.scheduler_log_box = ctk.CTkTextbox(
+            log_frame,
+            fg_color="transparent",
+            text_color="#a6e3a1",
+            font=ctk.CTkFont(family="Consolas", size=10),
+            height=65
+        )
+        self.scheduler_log_box.pack(fill="both", expand=True, padx=10, pady=(1, 8))
+        self.scheduler_log_box.configure(state="disabled")
+
+    def add_scheduler_log(self, message):
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        log_line = f"[{timestamp}] {message}\n"
+        def append_log():
+            self.scheduler_log_box.configure(state="normal")
+            self.scheduler_log_box.insert("end", log_line)
+            self.scheduler_log_box.see("end")
+            self.scheduler_log_box.configure(state="disabled")
+        self.after(0, append_log)
+
+    def select_scheduler_video(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Video Files", "*.mp4 *.mov *.avi *.mkv"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.scheduler_selected_file = file_path
+            display_name = os.path.basename(file_path)
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
+            self.file_path_lbl.configure(text=display_name, text_color="#a6e3a1")
+
+    def add_scheduled_post(self):
+        if not self.scheduler_selected_file:
+            self.add_scheduler_log("Error: Please select a video file first.")
+            return
+            
+        caption = self.scheduler_caption.get("1.0", "end-1c").strip()
+        date_val = self.scheduler_date_entry.get().strip()
+        hour_val = self.scheduler_hour.get()
+        min_val = self.scheduler_minute.get()
+        ampm_val = self.scheduler_ampm.get()
+        
+        try:
+            hour_int = int(hour_val)
+            if ampm_val == "PM" and hour_int < 12:
+                hour_int += 12
+            elif ampm_val == "AM" and hour_int == 12:
+                hour_int = 0
+            time_str = f"{hour_int:02d}:{min_val}"
+            scheduled_time_str = f"{date_val} {time_str}"
+            
+            import datetime
+            datetime.datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M")
+        except Exception:
+            self.add_scheduler_log("Error: Invalid date/time format. Please check your inputs.")
+            return
+            
+        platform_raw = self.scheduler_platform.get()
+        platform = "youtube" if platform_raw == "YouTube Shorts" else "instagram"
+        
+        uniquifier_opts = {
+            "mirror": bool(self.unq_mirror.get()),
+            "speed": bool(self.unq_speed.get()),
+            "contrast": bool(self.unq_contrast.get()),
+            "scrub": bool(self.unq_scrub.get())
+        }
+        
+        import scheduler_db
+        task = scheduler_db.add_task(
+            video_path=self.scheduler_selected_file,
+            platform=platform,
+            caption=caption,
+            scheduled_time_str=scheduled_time_str,
+            uniquifier_opts=uniquifier_opts
+        )
+        
+        self.add_scheduler_log(f"Scheduled upload for {os.path.basename(self.scheduler_selected_file)} at {scheduled_time_str}.")
+        
+        self.scheduler_selected_file = None
+        self.file_path_lbl.configure(text="No file selected", text_color="#7f849c")
+        self.scheduler_caption.delete("1.0", "end")
+        self.refresh_scheduler_queue()
+
+    def refresh_scheduler_queue(self):
+        for child in self.scheduler_scroll.winfo_children():
+            child.destroy()
+            
+        import scheduler_db
+        tasks = scheduler_db.load_schedule()
+        
+        if not tasks:
+            self.scheduler_placeholder = ctk.CTkLabel(
+                self.scheduler_scroll,
+                text="No scheduled posts yet.\nFill the form on the left to schedule a video.",
+                font=ctk.CTkFont(family="Segoe UI", size=11),
+                text_color="#7f849c",
+                justify="center"
+            )
+            self.scheduler_placeholder.pack(pady=100)
+            return
+            
+        for task in reversed(tasks):
+            card = ctk.CTkFrame(
+                self.scheduler_scroll,
+                fg_color="#1e1e2e",
+                border_color="#313244",
+                border_width=1,
+                corner_radius=8
+            )
+            card.pack(fill="x", pady=4, padx=5)
+            
+            meta_frame = ctk.CTkFrame(card, fg_color="transparent")
+            meta_frame.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+            
+            file_name = os.path.basename(task["video_path"])
+            file_display = file_name if len(file_name) <= 24 else file_name[:21] + "..."
+            
+            name_lbl = ctk.CTkLabel(
+                meta_frame,
+                text=file_display,
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                text_color="#cdd6f4",
+                anchor="w"
+            )
+            name_lbl.pack(anchor="w")
+            
+            plat_text = "YouTube Shorts" if task["platform"] == "youtube" else "Instagram Reels"
+            plat_color = "#f38ba8" if task["platform"] == "youtube" else "#f5c2e7"
+            
+            details_lbl = ctk.CTkLabel(
+                meta_frame,
+                text=f"{plat_text} | {task['scheduled_time']}",
+                font=ctk.CTkFont(family="Segoe UI", size=10),
+                text_color=plat_color,
+                anchor="w"
+            )
+            details_lbl.pack(anchor="w", pady=(2, 0))
+            
+            control_frame = ctk.CTkFrame(card, fg_color="transparent")
+            control_frame.pack(side="right", padx=10, pady=8)
+            
+            status = task["status"]
+            status_text = status.upper()
+            status_color = "#a6e3a1"
+            if status == "scheduled":
+                status_color = "#f9e2af"
+            elif status == "uploading":
+                status_color = "#fab387"
+            elif status == "failed":
+                status_color = "#f38ba8"
+                
+            status_lbl = ctk.CTkLabel(
+                control_frame,
+                text=status_text,
+                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+                text_color=status_color
+            )
+            status_lbl.pack(side="left", padx=5)
+            
+            if status in ["scheduled", "failed"]:
+                pub_btn = ctk.CTkButton(
+                    control_frame,
+                    text="🚀",
+                    width=24,
+                    height=24,
+                    fg_color="#45475a",
+                    hover_color="#a6e3a1",
+                    text_color="#cdd6f4",
+                    command=lambda t_id=task["id"]: self.trigger_publish_now(t_id),
+                    corner_radius=4,
+                    font=ctk.CTkFont(size=10)
+                )
+                pub_btn.pack(side="left", padx=2)
+                
+            cancel_btn = ctk.CTkButton(
+                control_frame,
+                text="❌",
+                width=24,
+                height=24,
+                fg_color="#45475a",
+                hover_color="#f38ba8",
+                text_color="#cdd6f4",
+                command=lambda t_id=task["id"]: self.trigger_cancel_task(t_id),
+                corner_radius=4,
+                font=ctk.CTkFont(size=10)
+            )
+            cancel_btn.pack(side="left", padx=2)
+
+    def trigger_publish_now(self, task_id):
+        import scheduler_db
+        tasks = scheduler_db.load_schedule()
+        for task in tasks:
+            if task["id"] == task_id:
+                scheduler_db.update_task_status(task_id, "uploading")
+                self.refresh_scheduler_queue()
+                self.add_scheduler_log(f"Forcing immediate upload for task {task_id}...")
+                threading.Thread(target=self.execute_upload_worker, args=(task,), daemon=True).start()
+                break
+
+    def trigger_cancel_task(self, task_id):
+        import scheduler_db
+        scheduler_db.delete_task(task_id)
+        self.add_scheduler_log(f"Task {task_id} cancelled.")
+        self.refresh_scheduler_queue()
+
+    def start_scheduler_loop(self):
+        threading.Thread(target=self.scheduler_loop_worker, daemon=True).start()
+
+    def scheduler_loop_worker(self):
+        import scheduler_db
+        from datetime import datetime
+        import time
+        
+        while True:
+            try:
+                tasks = scheduler_db.load_schedule()
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+                now_dt = datetime.strptime(now_str, "%Y-%m-%d %H:%M")
+                
+                for task in tasks:
+                    if task["status"] == "scheduled":
+                        try:
+                            task_time_dt = datetime.strptime(task["scheduled_time"], "%Y-%m-%d %H:%M")
+                            if now_dt >= task_time_dt:
+                                scheduler_db.update_task_status(task["id"], "uploading")
+                                self.refresh_scheduler_queue()
+                                self.add_scheduler_log(f"Starting scheduled upload for task {task['id']}...")
+                                threading.Thread(target=self.execute_upload_worker, args=(task,), daemon=True).start()
+                        except Exception as e:
+                            print(f"Error checking schedule: {e}")
+            except Exception as e:
+                print(f"Scheduler loop error: {e}")
+            time.sleep(15)
+
+    def execute_upload_worker(self, task):
+        import scheduler_db
+        import uploader
+        import os
+        
+        task_id = task["id"]
+        video_path = task["video_path"]
+        platform = task["platform"]
+        caption = task["caption"]
+        opts = task["uniquifier_opts"]
+        
+        processed_path = video_path
+        if any(opts.values()):
+            try:
+                dir_name = os.path.dirname(video_path)
+                base_name = os.path.basename(video_path)
+                processed_path = os.path.join(dir_name, f"unique_{task_id}_{base_name}")
+                
+                uploader.uniquify_video(
+                    input_path=video_path,
+                    output_path=processed_path,
+                    mirror=opts.get("mirror", False),
+                    speed=opts.get("speed", False),
+                    contrast=opts.get("contrast", False),
+                    scrub=opts.get("scrub", True),
+                    log_callback=lambda msg: self.add_scheduler_log(msg)
+                )
+            except Exception as e:
+                self.add_scheduler_log(f"Uniquifier failed: {e}")
+                scheduler_db.update_task_status(task_id, "failed", f"Uniquifier failed: {e}")
+                self.refresh_scheduler_queue()
+                return
+                
+        try:
+            if platform == "instagram":
+                uploader.upload_to_instagram(
+                    video_path=processed_path,
+                    caption=caption,
+                    log_callback=lambda msg: self.add_scheduler_log(msg)
+                )
+            elif platform == "youtube":
+                title = os.path.splitext(os.path.basename(video_path))[0]
+                uploader.upload_to_youtube(
+                    video_path=processed_path,
+                    title=title,
+                    caption=caption,
+                    log_callback=lambda msg: self.add_scheduler_log(msg)
+                )
+                
+            scheduler_db.update_task_status(task_id, "published")
+            self.add_scheduler_log(f"Task {task_id} uploaded successfully!")
+            
+            if processed_path != video_path and os.path.exists(processed_path):
+                try:
+                    os.remove(processed_path)
+                except:
+                    pass
+                    
+        except Exception as ex:
+            self.add_scheduler_log(f"Upload failed: {ex}")
+            scheduler_db.update_task_status(task_id, "failed", f"Upload failed: {ex}")
+            
+            if processed_path != video_path and os.path.exists(processed_path):
+                try:
+                    os.remove(processed_path)
+                except:
+                    pass
+                    
+        self.refresh_scheduler_queue()
 
     def browse_folder(self):
         chosen = filedialog.askdirectory(initialdir=self.download_dir.get())
