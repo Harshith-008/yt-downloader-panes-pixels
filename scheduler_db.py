@@ -21,13 +21,14 @@ def save_schedule(tasks):
     except Exception as e:
         print(f"Error saving schedule: {e}")
 
-def add_task(video_path, platform, caption, scheduled_time_str, uniquifier_opts):
+def add_task(video_path, platform, caption, scheduled_time_str, uniquifier_opts, publish_at=None):
     """
     video_path: Absolute path to video file
     platform: 'youtube' or 'instagram'
     caption: text description for post
     scheduled_time_str: datetime string format 'YYYY-MM-DD HH:MM'
     uniquifier_opts: dict containing: {'mirror': bool, 'speed': bool, 'contrast': bool, 'scrub': bool}
+    publish_at: ISO 8601 formatted timestamp for native platform scheduling
     """
     tasks = load_schedule()
     
@@ -40,6 +41,7 @@ def add_task(video_path, platform, caption, scheduled_time_str, uniquifier_opts)
         "platform": platform,
         "caption": caption,
         "scheduled_time": scheduled_time_str,
+        "publish_at": publish_at,
         "status": "scheduled",
         "error_msg": None,
         "uniquifier_opts": uniquifier_opts,

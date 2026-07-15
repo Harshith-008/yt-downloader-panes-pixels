@@ -2355,6 +2355,17 @@ class App(ctk.CTk):
         platform_raw = self.scheduler_platform.get()
         platform = "youtube" if platform_raw == "YouTube Shorts" else "instagram"
         
+        # Preventative Bug Handling: Calculate YouTube publishAt ISO timestamp
+        publish_at_iso = None
+        if platform == "youtube":
+            import datetime
+            dt = datetime.datetime.strptime(scheduled_time_str, "%Y-%m-%d %H:%M")
+            now = datetime.datetime.now()
+            if dt <= now + datetime.timedelta(minutes=5):
+                self.add_scheduler_log("Scheduled time is under 5 mins in the future. Uploading to YouTube as Public immediately...")
+            else:
+                publish_at_iso = dt.astimezone().isoformat()
+                
         uniquifier_opts = {
             "mirror": bool(self.unq_mirror.get()),
             "speed": bool(self.unq_speed.get()),
@@ -2368,11 +2379,18 @@ class App(ctk.CTk):
             platform=platform,
             caption=caption,
             scheduled_time_str=scheduled_time_str,
-            uniquifier_opts=uniquifier_opts
+            uniquifier_opts=uniquifier_opts,
+            publish_at=publish_at_iso
         )
         
-        self.add_scheduler_log(f"Scheduled upload for {os.path.basename(self.scheduler_selected_file)} at {scheduled_time_str}.")
-        
+        if platform == "youtube":
+            task["status"] = "uploading"
+            scheduler_db.update_task_status(task["id"], "uploading")
+            self.add_scheduler_log(f"Initiating background upload of {os.path.basename(self.scheduler_selected_file)} to YouTube Studio for native scheduling...")
+            threading.Thread(target=self.execute_upload_worker, args=(task,), daemon=True).start()
+        else:
+            self.add_scheduler_log(f"Scheduled local upload for {os.path.basename(self.scheduler_selected_file)} at {scheduled_time_str}.")
+            
         self.scheduler_selected_file = None
         self.file_path_lbl.configure(text="No file selected", text_color="#7f849c")
         self.scheduler_caption.delete("1.0", "end")
@@ -2539,6 +2557,7 @@ class App(ctk.CTk):
         platform = task["platform"]
         caption = task["caption"]
         opts = task["uniquifier_opts"]
+        publish_at = task.get("publish_at")
         
         processed_path = video_path
         if any(opts.values()):
@@ -2575,6 +2594,7 @@ class App(ctk.CTk):
                     video_path=processed_path,
                     title=title,
                     caption=caption,
+                    publish_at=publish_at,
                     log_callback=lambda msg: self.add_scheduler_log(msg)
                 )
                 

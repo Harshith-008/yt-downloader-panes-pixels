@@ -136,7 +136,7 @@ def upload_to_instagram(video_path, caption, log_callback=None):
     return media.pk
 
 
-def upload_to_youtube(video_path, title, caption, log_callback=None):
+def upload_to_youtube(video_path, title, caption, publish_at=None, log_callback=None):
     """
     Uploads a video to YouTube Shorts using the official YouTube Data API v3.
     """
@@ -191,6 +191,9 @@ def upload_to_youtube(video_path, title, caption, log_callback=None):
     # Ensure title fits within YouTube's 100 character limit
     safe_title = title if len(title) <= 100 else title[:97] + "..."
     
+    # If scheduled to publish at a future date/time, status must be private
+    privacy_status = 'private' if publish_at else 'public'
+    
     body = {
         'snippet': {
             'title': safe_title,
@@ -198,10 +201,15 @@ def upload_to_youtube(video_path, title, caption, log_callback=None):
             'categoryId': '22'  # People & Blogs
         },
         'status': {
-            'privacyStatus': 'public',
+            'privacyStatus': privacy_status,
             'selfDeclaredMadeForKids': False
         }
     }
+    
+    if publish_at:
+        body['status']['publishAt'] = publish_at
+        if log_callback:
+            log_callback(f"Setting YouTube Studio schedule: {publish_at}")
     
     media = MediaFileUpload(video_path, chunksize=1024*1024, resumable=True, mimetype='video/*')
     request = youtube.videos().insert(
