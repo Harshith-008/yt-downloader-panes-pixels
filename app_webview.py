@@ -1,5 +1,9 @@
 import os
 import sys
+
+# Ensure the application directory is in the import path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import threading
 import time
 import webview
