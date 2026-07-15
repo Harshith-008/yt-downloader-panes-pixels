@@ -1,11 +1,8 @@
 import PyInstaller.__main__
 import os
 import shutil
-import customtkinter
 
 def run_build():
-    customtkinter_path = os.path.dirname(customtkinter.__file__)
-    print(f"CustomTkinter path: {customtkinter_path}")
     
     dist_dir = os.path.join(os.getcwd(), 'dist')
     build_dir = os.path.join(os.getcwd(), 'build')
@@ -21,12 +18,12 @@ def run_build():
     # 2. Build the main application (onedir mode)
     print("\n--- BUILDING MAIN APPLICATION ---")
     app_args = [
-        'app.py',
+        'app_webview.py',
         '--name=YT Downloader by Panes & Pixels',
         '--onedir',
         '--noconsole',
         '--icon=icon.ico',
-        f'--add-data={customtkinter_path}{os.pathsep}customtkinter',
+        f'--add-data=dist{os.pathsep}dist',
         f'--add-data=icon.ico{os.pathsep}.',
         '--clean',
     ]
