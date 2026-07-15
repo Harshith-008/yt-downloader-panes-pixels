@@ -65,6 +65,27 @@ def is_downloaded(platform, page_id, video_id):
     page_id = page_id.lower().strip()
     return video_id in history.get(platform, {}).get(page_id, [])
 
+def get_configured_proxy():
+    config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+    if os.path.exists(config_path):
+        try:
+            import crypto_utils
+            with open(config_path, "r", encoding="utf-8") as f:
+                enc_str = f.read().strip()
+            creds = crypto_utils.decrypt_credentials(enc_str)
+            if creds and len(creds) > 2:
+                proxy = creds[2].strip()
+                return proxy if proxy else None
+        except Exception:
+            pass
+    return None
+
+def apply_proxy_to_ydl_opts(opts):
+    proxy = get_configured_proxy()
+    if proxy:
+        opts['proxy'] = proxy
+    return opts
+
 def get_top_shorts(channel_url, progress_callback=None, limit=100):
     """
     Scrapes the channel's shorts page, fetches up to `limit` entries,
@@ -81,6 +102,7 @@ def get_top_shorts(channel_url, progress_callback=None, limit=100):
         'quiet': True,
         'no_warnings': True,
     }
+    ydl_opts = apply_proxy_to_ydl_opts(ydl_opts)
     
     # Extract channel identifier for history lookup
     # e.g., https://www.youtube.com/@handle/shorts -> @handle
@@ -205,6 +227,7 @@ def download_short(video_url, download_dir, progress_callback=None, format_prese
     
     # Merge format options based on preset
     ydl_opts.update(get_ydl_format_options(format_preset))
+    ydl_opts = apply_proxy_to_ydl_opts(ydl_opts)
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
@@ -304,6 +327,7 @@ def get_insta_reel_info(reel_url):
         
     last_err = None
     for opts in ydl_opts_list:
+        opts = apply_proxy_to_ydl_opts(opts)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(reel_url, download=False)
@@ -367,6 +391,9 @@ def download_insta_reel_via_instaloader(reel_url, download_dir, session_dir, aut
         post_metadata_txt_pattern='',
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     )
+    proxy = get_configured_proxy()
+    if proxy:
+        L.context._session.proxies = {"http": proxy, "https": proxy}
     
     session_loaded = False
     if auth_username and session_dir:
@@ -479,6 +506,7 @@ def download_insta_reel(reel_url, download_dir, ydl_opts=None, progress_callback
         'no_warnings': True,
     })
     opts.update(get_ydl_format_options(format_preset))
+    opts = apply_proxy_to_ydl_opts(opts)
     
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(reel_url, download=True)
@@ -512,6 +540,7 @@ def get_shorts_by_hashtags(hashtags_str, sort_by):
             'quiet': True,
             'no_warnings': True,
         }
+        ydl_opts = apply_proxy_to_ydl_opts(ydl_opts)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -574,6 +603,7 @@ def get_youtube_video_info(video_url):
         'quiet': True,
         'no_warnings': True,
     }
+    ydl_opts = apply_proxy_to_ydl_opts(ydl_opts)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=False)
         title = info.get('title') or 'YouTube Video'
@@ -633,6 +663,7 @@ def download_youtube_video(video_url, download_dir, progress_callback=None, form
         'no_warnings': True,
     }
     opts.update(get_ydl_format_options(format_preset))
+    opts = apply_proxy_to_ydl_opts(opts)
     
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
@@ -688,6 +719,10 @@ def instagram_web_login(username, password):
     import json
     
     session = requests.Session()
+    proxy = get_configured_proxy()
+    if proxy:
+        session.proxies = {"http": proxy, "https": proxy}
+        
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -787,6 +822,10 @@ def load_instagram_session(username, session_dir):
             return None
         
         session = requests.Session()
+        proxy = get_configured_proxy()
+        if proxy:
+            session.proxies = {"http": proxy, "https": proxy}
+            
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         })
@@ -1118,10 +1157,12 @@ def get_insta_profile_reels(target_username, session_dir, auth_username=None, au
     # --- Step 2: Instaloader fallback ---
     print("[Fallback] Trying instaloader...")
     try:
-        import instaloader
         L = instaloader.Instaloader(
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
         )
+        proxy = get_configured_proxy()
+        if proxy:
+            L.context._session.proxies = {"http": proxy, "https": proxy}
         
         # Load instaloader session
         if auth_username and session_dir:

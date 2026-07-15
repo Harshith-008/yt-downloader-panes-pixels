@@ -613,12 +613,11 @@ class TermsWindow(ctk.CTk):
         self.accepted = False
         self.destroy()
 
-
 class InstaLoginWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Instagram Login Settings")
-        self.geometry("450x430")
+        self.geometry("450x520")
         self.resizable(False, False)
         self.configure(fg_color="#11111b")
         self.transient(parent)
@@ -680,6 +679,20 @@ class InstaLoginWindow(ctk.CTkToplevel):
         )
         self.pass_entry.pack(pady=10)
         
+        # Proxy Field
+        self.proxy_entry = ctk.CTkEntry(
+            self,
+            placeholder_text="Proxy (e.g. http://user:pass@host:port) (Optional)...",
+            width=320,
+            height=35,
+            fg_color="#1e1e2e",
+            border_color="#313244",
+            text_color="#cdd6f4",
+            corner_radius=6,
+            font=ctk.CTkFont(family="Segoe UI", size=12)
+        )
+        self.proxy_entry.pack(pady=10)
+        
         # Status Label
         self.status_lbl = ctk.CTkLabel(
             self,
@@ -733,7 +746,21 @@ class InstaLoginWindow(ctk.CTkToplevel):
             command=self.login_via_browser,
             corner_radius=6
         )
-        self.browser_btn.pack(pady=(5, 15))
+        self.browser_btn.pack(pady=(5, 10))
+        
+        self.reset_history_btn = ctk.CTkButton(
+            self,
+            text="Reset Scrape History",
+            width=260,
+            height=35,
+            fg_color="#f38ba8",
+            hover_color="#eba0ac",
+            text_color="#11111b",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self.reset_scrape_history,
+            corner_radius=6
+        )
+        self.reset_history_btn.pack(pady=(5, 15))
         
         # Load existing details if any
         self.load_creds()
@@ -747,16 +774,31 @@ class InstaLoginWindow(ctk.CTkToplevel):
                     enc_str = f.read().strip()
                 creds = crypto_utils.decrypt_credentials(enc_str)
                 if creds:
-                    user, pw = creds
+                    user = creds[0]
+                    pw = creds[1]
+                    proxy = creds[2] if len(creds) > 2 else ""
                     self.user_entry.insert(0, user)
                     self.pass_entry.insert(0, pw)
+                    self.proxy_entry.insert(0, proxy)
                     self.status_lbl.configure(text="Loaded saved credentials (encrypted).", text_color="#a6e3a1")
             except Exception as e:
                 print(f"Error loading credentials: {e}")
                 
+    def reset_scrape_history(self):
+        history_file = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_history.json")
+        if os.path.exists(history_file):
+            try:
+                os.remove(history_file)
+                self.status_lbl.configure(text="Scrape history reset successfully!", text_color="#a6e3a1")
+            except Exception as e:
+                self.status_lbl.configure(text=f"Reset failed: {e}", text_color="#f38ba8")
+        else:
+            self.status_lbl.configure(text="No scrape history found to reset.", text_color="#f9e2af")
+
     def save_creds(self):
         user = self.user_entry.get().strip()
         pw = self.pass_entry.get().strip()
+        proxy = self.proxy_entry.get().strip()
         if not user or not pw:
             self.status_lbl.configure(text="Please fill in both fields.", text_color="#f38ba8")
             return
@@ -766,12 +808,19 @@ class InstaLoginWindow(ctk.CTkToplevel):
         self.status_lbl.configure(text="Connecting to Instagram...", text_color="#f9e2af")
         self.update()
         
-        threading.Thread(target=self.login_worker, args=(user, pw), daemon=True).start()
+        threading.Thread(target=self.login_worker, args=(user, pw, proxy), daemon=True).start()
         
-    def login_worker(self, username, password):
+    def login_worker(self, username, password, proxy):
         try:
             import downloader
             
+            # Temporarily save credentials with proxy so downloader.instagram_web_login can read proxy config
+            import crypto_utils
+            enc_str = crypto_utils.encrypt_credentials(username, password, proxy)
+            config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(enc_str)
+                
             try:
                 # Use direct web login (same as browser)
                 session = downloader.instagram_web_login(username, password)
@@ -783,13 +832,6 @@ class InstaLoginWindow(ctk.CTkToplevel):
                 )
                 downloader.save_instagram_session(session, username, session_dir)
                 
-                # Save encrypted credentials
-                import crypto_utils
-                enc_str = crypto_utils.encrypt_credentials(username, password)
-                config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
-                with open(config_path, "w", encoding="utf-8") as f:
-                    f.write(enc_str)
-                    
                 self.after(0, lambda: self.login_success())
             except Exception as e:
                 err_msg = str(e)
@@ -799,12 +841,14 @@ class InstaLoginWindow(ctk.CTkToplevel):
                         import instaloader
                         from instaloader.exceptions import TwoFactorAuthRequiredException
                         L = instaloader.Instaloader(
-                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+                            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, size Gecko) Chrome/126.0.0.0 Safari/537.36'
                         )
+                        if proxy:
+                            L.context._session.proxies = {"http": proxy, "https": proxy}
                         try:
                             L.login(username, password)
                         except TwoFactorAuthRequiredException:
-                            self.after(0, lambda: self.handle_2fa(L, username, password))
+                            self.after(0, lambda: self.handle_2fa(L, username, password, proxy))
                             return
                     except Exception:
                         pass
@@ -814,7 +858,7 @@ class InstaLoginWindow(ctk.CTkToplevel):
         except Exception as e:
             self.after(0, lambda err=e: self.login_failed(f"Error: {err}"))
             
-    def handle_2fa(self, L, username, password):
+    def handle_2fa(self, L, username, password, proxy):
         dialog = ctk.CTkInputDialog(
             text="Two-Factor Authentication is required.\nPlease enter the code sent to your device:",
             title="Instagram 2FA"
@@ -830,9 +874,9 @@ class InstaLoginWindow(ctk.CTkToplevel):
         self.status_lbl.configure(text="Verifying 2FA code...", text_color="#f9e2af")
         self.update()
         
-        threading.Thread(target=self.verify_2fa_worker, args=(L, username, password, code), daemon=True).start()
+        threading.Thread(target=self.verify_2fa_worker, args=(L, username, password, code, proxy), daemon=True).start()
         
-    def verify_2fa_worker(self, L, username, password, code):
+    def verify_2fa_worker(self, L, username, password, code, proxy):
         try:
             session_file = os.path.join(
                 os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local")),
@@ -845,7 +889,7 @@ class InstaLoginWindow(ctk.CTkToplevel):
             L.save_session_to_file(filename=session_file)
             
             import crypto_utils
-            enc_str = crypto_utils.encrypt_credentials(username, password)
+            enc_str = crypto_utils.encrypt_credentials(username, password, proxy)
             config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write(enc_str)
@@ -876,10 +920,12 @@ class InstaLoginWindow(ctk.CTkToplevel):
                 pass
         self.user_entry.delete(0, "end")
         self.pass_entry.delete(0, "end")
+        self.proxy_entry.delete(0, "end")
         self.status_lbl.configure(text="Cleared credentials.", text_color="#f9e2af")
         
     def login_via_browser(self):
         user = self.user_entry.get().strip()
+        proxy = self.proxy_entry.get().strip()
         if not user:
             self.status_lbl.configure(text="Please enter your Instagram username first.", text_color="#f38ba8")
             return
@@ -890,9 +936,19 @@ class InstaLoginWindow(ctk.CTkToplevel):
         self.status_lbl.configure(text="Opening browser login window...", text_color="#f9e2af")
         self.update()
         
-        threading.Thread(target=self.browser_login_worker, args=(user,), daemon=True).start()
+        # Save temporary credentials file so proxy is written to disk for helper webview process
+        import crypto_utils
+        enc_str = crypto_utils.encrypt_credentials(user, "temp_browser", proxy)
+        config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(enc_str)
+        except:
+            pass
+            
+        threading.Thread(target=self.browser_login_worker, args=(user, proxy), daemon=True).start()
         
-    def browser_login_worker(self, username):
+    def browser_login_worker(self, username, proxy):
         try:
             import subprocess
             import sys
@@ -909,13 +965,18 @@ class InstaLoginWindow(ctk.CTkToplevel):
                 except:
                     pass
             
-            # Find webview_login_helper.py path
+            # Find app.py path
             app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-            helper_path = os.path.join(app_dir, "webview_login_helper.py")
             
             # Run helper script in a separate process to avoid thread conflicts
             # Use subprocess to run the helper cleanly on its own main thread
-            result = subprocess.run([sys.executable, helper_path], capture_output=True, text=True)
+            if getattr(sys, 'frozen', False):
+                cmd = [sys.executable, "--webview-login"]
+            else:
+                app_path = os.path.join(app_dir, "app.py")
+                cmd = [sys.executable, app_path, "--webview-login"]
+                
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
             if os.path.exists(temp_path):
                 self.after(0, lambda: self.status_lbl.configure(text="Verifying session...", text_color="#f9e2af"))
@@ -929,6 +990,9 @@ class InstaLoginWindow(ctk.CTkToplevel):
                     pass
                 
                 session = requests.Session()
+                if proxy:
+                    session.proxies = {"http": proxy, "https": proxy}
+                    
                 session.headers.update({
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
                 })
@@ -944,7 +1008,7 @@ class InstaLoginWindow(ctk.CTkToplevel):
                     downloader.save_instagram_session(session, username, session_dir)
                     
                     # Save credentials with dummy password
-                    enc_str = crypto_utils.encrypt_credentials(username, "browser_session")
+                    enc_str = crypto_utils.encrypt_credentials(username, "browser_session", proxy)
                     config_path = os.path.join(os.path.expanduser("~"), ".yt_shorts_downloader_insta")
                     with open(config_path, "w", encoding="utf-8") as f:
                         f.write(enc_str)
@@ -1498,6 +1562,18 @@ class App(ctk.CTk):
         self.yt_format_option.grid(row=1, column=1, columnspan=2, padx=(5, 15), pady=(6, 6), sticky="ew")
         self.yt_format_option.set("Best Quality (Video)")
         
+        self.organize_subfolders = ctk.CTkCheckBox(
+            self.controls_frame,
+            text="Organize into Creator Subfolders",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.organize_subfolders.grid(row=2, column=0, columnspan=3, padx=15, pady=(4, 4), sticky="w")
+        self.organize_subfolders.select()
+        
         self.download_btn = ctk.CTkButton(
             self.controls_frame,
             text="Download Selected Shorts",
@@ -1510,7 +1586,7 @@ class App(ctk.CTk):
             command=self.start_download,
             corner_radius=8
         )
-        self.download_btn.grid(row=2, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        self.download_btn.grid(row=3, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
         
         self.down_status_label = ctk.CTkLabel(
             self.controls_frame,
@@ -1518,7 +1594,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color="#f5e0dc"
         )
-        self.down_status_label.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.down_status_label.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
         self.down_status_label.grid_remove()
         
         self.down_progress = ctk.CTkProgressBar(
@@ -1527,7 +1603,7 @@ class App(ctk.CTk):
             fg_color="#181825",
             progress_color="#a6e3a1"
         )
-        self.down_progress.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.down_progress.grid(row=5, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
         self.down_progress.set(0)
         self.down_progress.grid_remove()
 
@@ -1808,6 +1884,18 @@ class App(ctk.CTk):
         self.format_option.grid(row=1, column=1, columnspan=2, padx=(5, 15), pady=(6, 6), sticky="ew")
         self.format_option.set("Best Quality (Video)")
         
+        self.insta_organize_subfolders = ctk.CTkCheckBox(
+            self.insta_controls_frame,
+            text="Organize into Creator Subfolders",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#cdd6f4",
+            fg_color="#a6e3a1",
+            hover_color="#94e2d5",
+            border_color="#45475a"
+        )
+        self.insta_organize_subfolders.grid(row=2, column=0, columnspan=3, padx=15, pady=(4, 4), sticky="w")
+        self.insta_organize_subfolders.select()
+        
         self.insta_download_btn = ctk.CTkButton(
             self.insta_controls_frame,
             text="Download Reel",
@@ -1820,7 +1908,7 @@ class App(ctk.CTk):
             command=self.start_insta_download,
             corner_radius=8
         )
-        self.insta_download_btn.grid(row=2, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
+        self.insta_download_btn.grid(row=3, column=0, columnspan=3, padx=15, pady=(6, 12), sticky="ew")
         
         self.insta_down_status_label = ctk.CTkLabel(
             self.insta_controls_frame,
@@ -1828,7 +1916,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color="#f5e0dc"
         )
-        self.insta_down_status_label.grid(row=3, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
+        self.insta_down_status_label.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 2), sticky="ew")
         self.insta_down_status_label.grid_remove()
         
         self.insta_down_progress = ctk.CTkProgressBar(
@@ -1837,7 +1925,7 @@ class App(ctk.CTk):
             fg_color="#181825",
             progress_color="#a6e3a1"
         )
-        self.insta_down_progress.grid(row=4, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
+        self.insta_down_progress.grid(row=5, column=0, columnspan=3, padx=15, pady=(0, 15), sticky="ew")
         self.insta_down_progress.set(0)
         self.insta_down_progress.grid_remove()
         
@@ -2657,14 +2745,36 @@ class App(ctk.CTk):
                 
         self.after(0, lambda: self.update_queue_ui(task_id, 0.0, 'N/A', 'N/A', 'downloading'))
         
+        # Jitter delay staggered start to emulate human behavior
+        import random
+        import time
+        time.sleep(random.uniform(1.0, 4.0))
+        
+        # Creator subfolder routing
+        dest_dir_to_use = dest_dir
+        if page_id:
+            use_subfolder = False
+            if platform == "youtube" and hasattr(self, 'organize_subfolders') and self.organize_subfolders.get():
+                use_subfolder = True
+            elif platform == "instagram" and hasattr(self, 'insta_organize_subfolders') and self.insta_organize_subfolders.get():
+                use_subfolder = True
+                
+            if use_subfolder:
+                import re
+                clean_page_id = re.sub(r'[\\/*?:"<>|]', "", page_id).strip()
+                folder_name = f"{platform}_{clean_page_id}"
+                sub_dest_dir = os.path.join(dest_dir, folder_name)
+                os.makedirs(sub_dest_dir, exist_ok=True)
+                dest_dir_to_use = sub_dest_dir
+        
         success = False
         try:
             import downloader
             if platform == "youtube":
                 if download_type == "short":
-                    downloader.download_short(url, dest_dir, progress_callback=progress_cb, format_preset=format_preset)
+                    downloader.download_short(url, dest_dir_to_use, progress_callback=progress_cb, format_preset=format_preset)
                 else:
-                    downloader.download_youtube_video(url, dest_dir, progress_callback=progress_cb, format_preset=format_preset)
+                    downloader.download_youtube_video(url, dest_dir_to_use, progress_callback=progress_cb, format_preset=format_preset)
             elif platform == "instagram":
                 # Check cookies session setup
                 ydl_opts = None
@@ -2672,7 +2782,7 @@ class App(ctk.CTk):
                     session_file = os.path.join(self.insta_session_dir, f"session-{self.insta_username}")
                     if os.path.exists(session_file):
                         pass
-                downloader.download_insta_reel(url, dest_dir, ydl_opts=ydl_opts, progress_callback=progress_cb, format_preset=format_preset)
+                downloader.download_insta_reel(url, dest_dir_to_use, ydl_opts=ydl_opts, progress_callback=progress_cb, format_preset=format_preset)
             success = True
             
             # Record in download history
@@ -2774,7 +2884,9 @@ if __name__ == "__main__":
                 height=650,
                 resizable=True
             )
-            webview.start(check_cookies, window)
+            import downloader
+            proxy = downloader.get_configured_proxy()
+            webview.start(check_cookies, window, http_proxy=proxy)
         except Exception as err:
             print(f"Webview error: {err}")
         sys.exit(0)

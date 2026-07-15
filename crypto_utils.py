@@ -70,8 +70,8 @@ def decrypt_bytes(data: bytes) -> bytes:
     finally:
         LocalFree(out_blob.pbData)
 
-def encrypt_credentials(username, password) -> str:
-    combined = f"{username}\n{password}".encode('utf-8')
+def encrypt_credentials(username, password, proxy="") -> str:
+    combined = f"{username}\n{password}\n{proxy}".encode('utf-8')
     encrypted = encrypt_bytes(combined)
     return base64.b64encode(encrypted).decode('utf-8')
 
@@ -79,9 +79,12 @@ def decrypt_credentials(encrypted_str: str):
     try:
         encrypted_bytes = base64.b64decode(encrypted_str.encode('utf-8'))
         decrypted_bytes = decrypt_bytes(encrypted_bytes)
-        parts = decrypted_bytes.decode('utf-8').split('\n', 1)
-        if len(parts) == 2:
-            return parts[0], parts[1]
+        parts = decrypted_bytes.decode('utf-8').split('\n', 2)
+        if len(parts) >= 2:
+            username = parts[0]
+            password = parts[1]
+            proxy = parts[2] if len(parts) > 2 else ""
+            return username, password, proxy
         return None
     except Exception as e:
         print(f"Decryption failed: {e}")
